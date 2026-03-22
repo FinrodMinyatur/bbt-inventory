@@ -388,22 +388,41 @@ body {
 
   <!-- Main Content -->
   <div class="content" id="mainContent">
-    <!-- Filters -->
-    <div style="padding:8px 0 4px;">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <select id="filterMarket" onchange="applyFilters()" style="flex:1;min-width:120px;padding:9px 10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;">
-          <option value="">All Markets</option>
+    <!-- Cascading Filters for Sales -->
+    <div style="padding:8px 0 0;">
+      <!-- Row 1: Brand + Product Line -->
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <select id="filterBrand" onchange="cascadeFilters('brand')" style="flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;appearance:auto;">
+          <option value="">🏷 All Brands</option>
         </select>
-        <select id="filterMain" onchange="applyFilters()" style="flex:1;min-width:120px;padding:9px 10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;">
-          <option value="">All Categories</option>
-        </select>
-        <select id="filterBrand" onchange="applyFilters()" style="flex:1;min-width:100px;padding:9px 10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;">
-          <option value="">All Brands</option>
+        <select id="filterPLine" onchange="cascadeFilters('pline')" style="flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;appearance:auto;">
+          <option value="">📦 Product Line</option>
         </select>
       </div>
+      <!-- Row 2: PLine1 + Focus Group -->
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <select id="filterPLine1" onchange="cascadeFilters('pline1')" style="flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;appearance:auto;">
+          <option value="">🔧 Sub-category</option>
+        </select>
+        <select id="filterFocus" onchange="cascadeFilters('focus')" style="flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;appearance:auto;">
+          <option value="">⭐ Focus Group</option>
+        </select>
+      </div>
+      <!-- Row 3: In Stock toggle + Location + Clear -->
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="toggleStock" onclick="toggleInStock()" style="padding:8px 14px;background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;transition:all 0.15s;">
+          📊 All Stock
+        </button>
+        <select id="filterLocation" onchange="cascadeFilters('loc')" style="flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;font-size:12px;font-family:inherit;appearance:auto;">
+          <option value="">📍 All Locations</option>
+        </select>
+        <button onclick="clearAllFilters()" style="padding:8px 14px;background:var(--surface);border:1px solid var(--border);color:var(--red);border-radius:10px;font-size:12px;cursor:pointer;white-space:nowrap;">
+          ✕ Clear
+        </button>
+      </div>
     </div>
-    <!-- Location filter chips -->
-    <div class="loc-chips" id="locChips"></div>
+    <!-- Active filter count -->
+    <div id="filterStatus" style="padding:6px 0;font-size:11px;color:var(--text3);"></div>
     <!-- Item list -->
     <div id="itemList"></div>
   </div>
@@ -476,6 +495,7 @@ let state = {
   items: [],          // master item list with inventory
   locations: [],      // unique location codes
   activeLocation: 'ALL',
+  inStockOnly: false,
   searchQuery: '',
   currentTab: 'stock',
   lastRefresh: null,
@@ -775,26 +795,56 @@ async function refreshData() {
     } catch(e) { console.warn('Location fetch failed:', e.message); }
     state._rawLocs = locData;
     
-    // Parse matrix: columns that are numeric = location codes
+    // Parse matrix: columns that are numeric or parseable = location codes
     const locMap = {};
     const locSet = new Set();
     if (locData.length > 0) {
       const sampleRow = locData[0];
       const allKeys = Object.keys(sampleRow);
-      const skipKeys = new Set(['@odata.etag','No','No_','Code','SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy']);
-      // Detect numeric columns = location codes
-      const locCols = allKeys.filter(k => !skipKeys.has(k) && typeof sampleRow[k] === 'number');
+      const skipKeys = new Set(['@odata.etag','No','No_','Code','SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy','Item_No','Description','Name']);
+      
+      // Detect location columns: numeric value OR string that parses to number, AND not a skip key
+      const locCols = allKeys.filter(k => {
+        if (skipKeys.has(k)) return false;
+        const v = sampleRow[k];
+        if (typeof v === 'number') return true;
+        if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) return true;
+        return false;
+      });
+      
+      // Debug: log what we found
+      console.log('📍 All columns:', allKeys.length, allKeys.slice(0, 20));
+      console.log('📍 Sample types:', allKeys.slice(0, 10).map(k => k + ':' + typeof sampleRow[k]));
       console.log('📍 Location columns detected:', locCols);
       
-      for (const row of locData) {
-        const itemNo = row.No || row.Code || row.No_ || '';
-        if (!itemNo) continue;
-        for (const col of locCols) {
-          const qty = parseFloat(row[col]) || 0;
-          if (qty === 0) continue;
-          if (!locMap[itemNo]) locMap[itemNo] = [];
-          locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
-          locSet.add(col);
+      if (locCols.length === 0) {
+        // Fallback: maybe ALL non-skip non-string columns are locations
+        // Or maybe the page returns Location_Code as a field (flat format)
+        const hasLocField = allKeys.includes('Location_Code');
+        console.log('📍 Has Location_Code field:', hasLocField);
+        if (hasLocField) {
+          // Flat format with Location_Code
+          for (const row of locData) {
+            const itemNo = row.No || row.Code || row.No_ || row.Item_No || '';
+            const loc = row.Location_Code || '';
+            const qty = parseFloat(row.Quantity || row.Inventory || row.Qty || 0) || 0;
+            if (!itemNo || !loc || qty === 0) continue;
+            if (!locMap[itemNo]) locMap[itemNo] = [];
+            locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
+            locSet.add(loc);
+          }
+        }
+      } else {
+        for (const row of locData) {
+          const itemNo = row.No || row.Code || row.No_ || '';
+          if (!itemNo) continue;
+          for (const col of locCols) {
+            const qty = parseFloat(row[col]) || 0;
+            if (qty === 0) continue;
+            if (!locMap[itemNo]) locMap[itemNo] = [];
+            locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
+            locSet.add(col);
+          }
         }
       }
       console.log('📍 Locations found:', Array.from(locSet));
@@ -882,7 +932,7 @@ async function refreshData() {
     updateStatusDot('online');
     updateStatusBar();
     populateFilterDropdowns();
-    renderLocChips();
+
     renderItems();
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     const prodCount = Object.keys(state._productCache?.p || {}).length;
@@ -1106,22 +1156,26 @@ function updateLoadingProgress(label, count, page, elapsed) {
 // ═══════════════════════════════════════════
 //  FILTERING & SEARCH
 // ═══════════════════════════════════════════
-function getFilteredItems(ignoreLocation) {
+function getFilteredItems() {
   let items = state.items;
   
-  // Location filter
-  if (!ignoreLocation && state.activeLocation !== 'ALL') {
-    items = items.filter(i => i.locations.some(l => l.loc === state.activeLocation));
+  // In-stock toggle
+  if (state.inStockOnly) {
+    items = items.filter(i => i.available > 0);
   }
   
-  // Dropdown filters
-  const fMarket = document.getElementById('filterMarket')?.value || '';
-  const fMain = document.getElementById('filterMain')?.value || '';
+  // Cascading dropdown filters
   const fBrand = document.getElementById('filterBrand')?.value || '';
+  const fPLine = document.getElementById('filterPLine')?.value || '';
+  const fPLine1 = document.getElementById('filterPLine1')?.value || '';
+  const fFocus = document.getElementById('filterFocus')?.value || '';
+  const fLoc = document.getElementById('filterLocation')?.value || '';
   
-  if (fMarket) items = items.filter(i => i.marketDetail === fMarket);
-  if (fMain) items = items.filter(i => i.mainDetail === fMain);
   if (fBrand) items = items.filter(i => i.brand === fBrand);
+  if (fPLine) items = items.filter(i => i.plineDetail === fPLine);
+  if (fPLine1) items = items.filter(i => i.pline1 === fPLine1);
+  if (fFocus) items = items.filter(i => i.focusGroup === fFocus);
+  if (fLoc) items = items.filter(i => i.locations.some(l => l.loc === fLoc));
   
   // Search
   if (state.searchQuery) {
@@ -1135,7 +1189,6 @@ function getFilteredItems(ignoreLocation) {
       i.pline1.toLowerCase().includes(q) ||
       i.classDetail.toLowerCase().includes(q) ||
       i.mainDetail.toLowerCase().includes(q) ||
-      i.category.toLowerCase().includes(q) ||
       (i.focusGroup && i.focusGroup.toLowerCase().includes(q))
     );
   }
@@ -1143,44 +1196,129 @@ function getFilteredItems(ignoreLocation) {
   return items;
 }
 
-function applyFilters() {
+// ──── Cascading filter logic ────
+function cascadeFilters(changedFilter) {
+  // When a filter changes, re-populate downstream filters based on current selection
+  populateFilterDropdowns(changedFilter);
   renderItems();
   updateStatusBar();
+  updateFilterStatus();
 }
 
-function populateFilterDropdowns() {
-  const markets = new Set();
-  const mains = new Set();
-  const brands = new Set();
-  
-  for (const item of state.items) {
-    if (item.marketDetail) markets.add(item.marketDetail);
-    if (item.mainDetail) mains.add(item.mainDetail);
-    if (item.brand) brands.add(item.brand);
+function toggleInStock() {
+  state.inStockOnly = !state.inStockOnly;
+  const btn = document.getElementById('toggleStock');
+  if (state.inStockOnly) {
+    btn.textContent = '✅ In Stock Only';
+    btn.style.background = 'var(--green-bg)';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+  } else {
+    btn.textContent = '📊 All Stock';
+    btn.style.background = 'var(--surface)';
+    btn.style.borderColor = 'var(--border)';
+    btn.style.color = 'var(--text2)';
   }
+  renderItems();
+  updateStatusBar();
+  updateFilterStatus();
+}
+
+function clearAllFilters() {
+  ['filterBrand','filterPLine','filterPLine1','filterFocus','filterLocation'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  state.inStockOnly = false;
+  const btn = document.getElementById('toggleStock');
+  if (btn) { btn.textContent = '📊 All Stock'; btn.style.background = 'var(--surface)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text2)'; }
+  populateFilterDropdowns();
+  renderItems();
+  updateStatusBar();
+  updateFilterStatus();
+}
+
+function updateFilterStatus() {
+  const el = document.getElementById('filterStatus');
+  if (!el) return;
+  const filtered = getFilteredItems();
+  const total = state.items.length;
+  const activeFilters = ['filterBrand','filterPLine','filterPLine1','filterFocus','filterLocation']
+    .filter(id => document.getElementById(id)?.value).length + (state.inStockOnly ? 1 : 0);
   
-  const fillSelect = (id, values, labelFn) => {
+  if (activeFilters > 0 || state.searchQuery) {
+    el.innerHTML = `<span style="color:var(--accent)">${filtered.length}</span> of ${total} items shown · ${activeFilters} filter${activeFilters !== 1 ? 's' : ''} active`;
+  } else {
+    el.innerHTML = `${total} items`;
+  }
+}
+
+function populateFilterDropdowns(changedFilter) {
+  const bm = state._brandMap || {};
+  let items = state.items;
+  
+  // For cascading: apply upstream filters to narrow downstream options
+  const fBrand = document.getElementById('filterBrand')?.value || '';
+  const fPLine = document.getElementById('filterPLine')?.value || '';
+  const fPLine1 = document.getElementById('filterPLine1')?.value || '';
+  const fFocus = document.getElementById('filterFocus')?.value || '';
+  
+  // In-stock filter applies to all
+  if (state.inStockOnly) items = items.filter(i => i.available > 0);
+  
+  // Brand: show all brands (no upstream filter)
+  const brandItems = items;
+  
+  // PLine: filtered by brand
+  const plineItems = fBrand ? items.filter(i => i.brand === fBrand) : items;
+  
+  // PLine1: filtered by brand + pline
+  let pline1Items = plineItems;
+  if (fPLine) pline1Items = pline1Items.filter(i => i.plineDetail === fPLine);
+  
+  // Focus: filtered by brand + pline + pline1
+  let focusItems = pline1Items;
+  if (fPLine1) focusItems = focusItems.filter(i => i.pline1 === fPLine1);
+  
+  // Location: show all locations
+  const locItems = items;
+  
+  // Collect unique values
+  const brands = new Set(), plines = new Set(), pline1s = new Set(), focuses = new Set(), locs = new Set();
+  
+  for (const i of brandItems) { if (i.brand) brands.add(i.brand); }
+  for (const i of plineItems) { if (i.plineDetail) plines.add(i.plineDetail); }
+  for (const i of pline1Items) { if (i.pline1) pline1s.add(i.pline1); }
+  for (const i of focusItems) { if (i.focusGroup) focuses.add(i.focusGroup); }
+  for (const i of locItems) { for (const l of i.locations) { if (l.loc) locs.add(l.loc); } }
+  
+  const fillSelect = (id, values, placeholder, labelFn) => {
     const el = document.getElementById(id);
     if (!el) return;
     const current = el.value;
     const sorted = Array.from(values).sort();
-    el.innerHTML = `<option value="">${el.options[0]?.text || 'All'}</option>` + 
+    // Count items per value
+    el.innerHTML = `<option value="">${placeholder} (${sorted.length})</option>` + 
       sorted.map(v => {
         const label = labelFn ? labelFn(v) : v;
-        return `<option value="${v}" ${v === current ? 'selected' : ''}>${label}</option>`;
+        return `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${label}</option>`;
       }).join('');
+    // If current selection no longer valid, reset
+    if (current && !values.has(current)) el.value = '';
   };
   
-  const bm = state._brandMap || {};
-  fillSelect('filterMarket', markets);
-  fillSelect('filterMain', mains);
-  fillSelect('filterBrand', brands, (code) => bm[code] ? `${bm[code]} (${code})` : code);
+  fillSelect('filterBrand', brands, '🏷 All Brands', (c) => bm[c] ? `${bm[c]}` : c);
+  fillSelect('filterPLine', plines, '📦 Product Line');
+  fillSelect('filterPLine1', pline1s, '🔧 Sub-category');
+  fillSelect('filterFocus', focuses, '⭐ Focus Group');
+  fillSelect('filterLocation', locs, '📍 All Locations');
 }
 
 function handleSearch(val) {
   state.searchQuery = val.trim();
   document.getElementById('searchClear').classList.toggle('show', val.length > 0);
   renderItems();
+  updateFilterStatus();
 }
 
 function clearSearch() {
@@ -1188,6 +1326,7 @@ function clearSearch() {
   state.searchQuery = '';
   document.getElementById('searchClear').classList.remove('show');
   renderItems();
+  updateFilterStatus();
 }
 
 function filterLocation(loc) {
