@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="BBT Stock">
 <meta name="theme-color" content="#0a0e1a">
-<title>BBT Inventory — Live</title>
+<title>BBT Inventory v2.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,300&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -705,8 +705,12 @@ async function refreshData() {
     if (!state._brandMap) {
       try {
         const brandEl = document.getElementById('brandMap');
-        if (brandEl) state._brandMap = JSON.parse(brandEl.textContent);
-      } catch(e) {}
+        if (brandEl) {
+          state._brandMap = JSON.parse(brandEl.textContent);
+          console.log('✅ Brand map loaded:', Object.keys(state._brandMap).length, 'brands');
+          console.log('   ACNR →', state._brandMap['ACNR'], '| CARR →', state._brandMap['CARR']);
+        }
+      } catch(e) { console.warn('Brand map error:', e.message); }
     }
     const prodMap = state._productCache?.p || {};
     const focusRules = state._productCache?.f || [];
