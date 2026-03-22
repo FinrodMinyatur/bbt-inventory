@@ -823,7 +823,7 @@ async function refreshData() {
     state.items.sort((a, b) => a.no.localeCompare(b.no));
     
     // Locations
-    state.locations = Array.from(locSet).sort();
+    state.locations = [];
     
     state.lastRefresh = new Date();
     updateStatusDot('online');
