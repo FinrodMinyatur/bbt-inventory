@@ -554,10 +554,11 @@ function startAuth() {
   
   // Build redirect URI — must match EXACTLY what's registered in Azure AD
   let redirectUri = window.location.origin + window.location.pathname;
-  // Remove trailing index.html if present
-  redirectUri = redirectUri.replace(/\/index\.html$/, '/');
-  // Ensure trailing slash for GitHub Pages
-  if (!redirectUri.endsWith('/')) redirectUri += '/';
+  // For index.html, use the directory path with trailing slash
+  if (redirectUri.endsWith('/index.html')) {
+    redirectUri = redirectUri.replace(/\/index\.html$/, '/');
+  }
+  // Do NOT add trailing slash for other .html files (app.html, diag.html etc.)
   
   const scope = encodeURIComponent('https://api.businesscentral.dynamics.com/.default');
   const nonce = Math.random().toString(36).substr(2);
@@ -788,67 +789,28 @@ async function refreshData() {
       return { fg: '', mfg: '' };
     }
     
-    // ──── STEP 4b: Fetch Location breakdown (matrix page) ────
+    // ──── STEP 4b: Fetch Location from Bin Contents (flat table) ────
     let locData = [];
     try {
-      locData = await fetchAllPages('Items_by_Location', '', '📍 Locations');
-    } catch(e) { console.warn('Location fetch failed:', e.message); }
+      locData = await fetchAllPages('Bin_Contents_List_Excel', 
+        '$select=Location_Code,Item_No,Quantity_Base', '📍 Locations');
+    } catch(e) { console.warn('Bin Contents fetch failed:', e.message); }
     state._rawLocs = locData;
     
-    // Parse matrix: columns that are numeric or parseable = location codes
+    // Parse Bin Contents: flat table with Location_Code, Item_No, Quantity_Base
     const locMap = {};
     const locSet = new Set();
-    if (locData.length > 0) {
-      const sampleRow = locData[0];
-      const allKeys = Object.keys(sampleRow);
-      const skipKeys = new Set(['@odata.etag','No','No_','Code','SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy','Item_No','Description','Name']);
-      
-      // Detect location columns: numeric value OR string that parses to number, AND not a skip key
-      const locCols = allKeys.filter(k => {
-        if (skipKeys.has(k)) return false;
-        const v = sampleRow[k];
-        if (typeof v === 'number') return true;
-        if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) return true;
-        return false;
-      });
-      
-      // Debug: log what we found
-      console.log('📍 All columns:', allKeys.length, allKeys.slice(0, 20));
-      console.log('📍 Sample types:', allKeys.slice(0, 10).map(k => k + ':' + typeof sampleRow[k]));
-      console.log('📍 Location columns detected:', locCols);
-      
-      if (locCols.length === 0) {
-        // Fallback: maybe ALL non-skip non-string columns are locations
-        // Or maybe the page returns Location_Code as a field (flat format)
-        const hasLocField = allKeys.includes('Location_Code');
-        console.log('📍 Has Location_Code field:', hasLocField);
-        if (hasLocField) {
-          // Flat format with Location_Code
-          for (const row of locData) {
-            const itemNo = row.No || row.Code || row.No_ || row.Item_No || '';
-            const loc = row.Location_Code || '';
-            const qty = parseFloat(row.Quantity || row.Inventory || row.Qty || 0) || 0;
-            if (!itemNo || !loc || qty === 0) continue;
-            if (!locMap[itemNo]) locMap[itemNo] = [];
-            locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
-            locSet.add(loc);
-          }
-        }
-      } else {
-        for (const row of locData) {
-          const itemNo = row.No || row.Code || row.No_ || '';
-          if (!itemNo) continue;
-          for (const col of locCols) {
-            const qty = parseFloat(row[col]) || 0;
-            if (qty === 0) continue;
-            if (!locMap[itemNo]) locMap[itemNo] = [];
-            locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
-            locSet.add(col);
-          }
-        }
-      }
-      console.log('📍 Locations found:', Array.from(locSet));
+    for (const row of locData) {
+      const itemNo = row.Item_No || '';
+      const loc = row.Location_Code || '';
+      const qty = parseFloat(row.Quantity_Base) || 0;
+      if (!itemNo || !loc || qty === 0) continue;
+      if (!locMap[itemNo]) locMap[itemNo] = [];
+      locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
+      locSet.add(loc);
     }
+    console.log('📍 Locations found:', Array.from(locSet));
+    console.log('📍 Items with location data:', Object.keys(locMap).length);
     
     // ──── STEP 5: Merge BC365 inventory + product catalog ────
     updateLoadingProgress('🔄 Merging data', items.length, 0, ((Date.now()-t0)/1000).toFixed(1));
@@ -1076,6 +1038,12 @@ function renderItems() {
         ${item.classDetail ? `<div class="item-meta-tag"><span class="label">Class:</span> ${esc(item.classDetail)}</div>` : ''}
         <div class="item-meta-tag"><span class="label">UoM:</span> ${esc(item.uom)}</div>
       </div>
+      ${item.locations.length > 0 ? `
+      <div style="margin-top:6px;font-size:11px;font-family:'JetBrains Mono',monospace;">
+        <span style="color:var(--text3);">📍</span> ${item.locations.map(l => 
+          `<span style="color:var(--text2);">${esc(l.loc)}</span><span style="color:${l.qty > 0 ? 'var(--green)' : 'var(--text3)'};">=${fmtNum(l.qty)}</span>`
+        ).join('<span style="color:var(--text3);"> · </span>')}
+      </div>` : ''}
       
       <div class="item-detail">
         ${item.mainDetail || item.marketDetail || item.pline1 ? `
@@ -1198,7 +1166,18 @@ function getFilteredItems() {
 
 // ──── Cascading filter logic ────
 function cascadeFilters(changedFilter) {
-  // When a filter changes, re-populate downstream filters based on current selection
+  // Reset downstream filters when upstream changes
+  if (changedFilter === 'brand') {
+    document.getElementById('filterPLine').value = '';
+    document.getElementById('filterPLine1').value = '';
+    document.getElementById('filterFocus').value = '';
+  } else if (changedFilter === 'pline') {
+    document.getElementById('filterPLine1').value = '';
+    document.getElementById('filterFocus').value = '';
+  } else if (changedFilter === 'pline1') {
+    document.getElementById('filterFocus').value = '';
+  }
+  // Re-populate with cascaded options
   populateFilterDropdowns(changedFilter);
   renderItems();
   updateStatusBar();
@@ -1297,12 +1276,17 @@ function populateFilterDropdowns(changedFilter) {
     if (!el) return;
     const current = el.value;
     const sorted = Array.from(values).sort();
-    // Count items per value
-    el.innerHTML = `<option value="">${placeholder} (${sorted.length})</option>` + 
-      sorted.map(v => {
-        const label = labelFn ? labelFn(v) : v;
-        return `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${label}</option>`;
-      }).join('');
+    let html = `<option value="">${placeholder} (${sorted.length})</option>`;
+    for (const v of sorted) {
+      const label = labelFn ? labelFn(v) : v;
+      // Use textContent for option to avoid HTML encoding issues
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = label;
+      if (v === current) opt.selected = true;
+      html += opt.outerHTML;
+    }
+    el.innerHTML = html;
     // If current selection no longer valid, reset
     if (current && !values.has(current)) el.value = '';
   };
