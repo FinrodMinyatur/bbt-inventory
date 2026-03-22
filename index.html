@@ -669,175 +669,113 @@ async function refreshData() {
       return null;
     };
     
-    // ──── STEP 1: Fetch product details from PRODUCTmr (Page 60009) ────
-    // This has Description, Description_2, Brand, Category, Product Line etc.
-    let productDetails = [];
-    try {
-      productDetails = await fetchAllPages('PRODUCTmr', '', '📋 Product Details');
-    } catch (e) { console.warn('PRODUCTmr failed:', e.message); }
+    // ──── STEP 1: Load product master data (cached static file) ────
+    updateLoadingProgress('📋 Product catalog', 0, 1, '0');
+    await new Promise(r => setTimeout(r, 0));
     
-    // Build lookup: No -> product detail row
-    const prodMap = {};
-    for (const p of productDetails) {
-      const no = f(p, 'No', 'No_', 'Item_No') || '';
-      if (no) prodMap[no] = p;
+    if (!state._productCache) {
+      try {
+        const baseUrl = window.location.href.replace(/\/[^\/]*$/, '/');
+        const prodResp = await fetch(baseUrl + 'products.json');
+        if (prodResp.ok) {
+          state._productCache = await prodResp.json();
+          console.log('✅ Product catalog loaded:', Object.keys(state._productCache.p || {}).length, 'items');
+        }
+      } catch(e) { console.warn('Product catalog not found:', e.message); }
     }
+    const prodMap = state._productCache?.p || {};
+    const focusRules = state._productCache?.f || [];
     
-    // ──── STEP 2: Fetch Item inventory from Item_Card_Excel (Page 30) ────
+    updateLoadingProgress('📋 Product catalog', Object.keys(prodMap).length, 1, ((Date.now()-t0)/1000).toFixed(1));
+    await new Promise(r => setTimeout(r, 0));
+    
+    // ──── STEP 2: Fetch live inventory from BC365 (1 fast call) ────
     let items = [];
     let usedEndpoint = '';
     for (const ep of ['Item_Card_Excel', 'ItemsListPBI']) {
       try {
-        items = await fetchAllPages(ep, '', '📦 Inventory (' + ep + ')');
+        items = await fetchAllPages(ep, '', '📦 Inventory');
         if (items.length > 0) { usedEndpoint = ep; break; }
-      } catch (e) { console.warn(ep + ' failed:', e.message); }
+      } catch (e) { console.warn(ep + ':', e.message); }
     }
-    
-    // ──── STEP 3: Fetch Location breakdown ────
-    let locData = [];
-    let locEndpointUsed = '';
-    for (const ep of ['Items_by_Location', 'Bin_Contents_List_Excel']) {
-      try {
-        locData = await fetchAllPages(ep, '', '📍 Locations (' + ep + ')');
-        if (locData.length > 0) { locEndpointUsed = ep; break; }
-      } catch (e) { console.warn(ep + ' failed:', e.message); }
-    }
-    
-    updateLoadingProgress('🔄 Processing', items.length + locData.length + productDetails.length, 0, ((Date.now() - t0) / 1000).toFixed(1));
     
     // Store raw for debug
     state._rawItems = items;
-    state._rawLocs = locData;
-    state._rawProducts = productDetails;
     state._usedEndpoint = usedEndpoint;
-    state._locEndpoint = locEndpointUsed;
     
-    // ──── STEP 4: Auto-detect item field names ────
-    let fieldMap = {};
+    // ──── STEP 3: Auto-detect BC365 field names ────
+    let fm = {};
     if (items.length > 0) {
       const k = Object.keys(items[0]);
       const find = (cs) => cs.find(c => k.includes(c)) || null;
-      fieldMap = {
+      fm = {
         no: find(['No', 'No_', 'Item_No']),
         desc: find(['Description', 'Item_Description', 'Name']),
         desc2: find(['Description_2', 'Description2']),
-        category: find(['Item_Category_Code', 'Item_Category', 'Gen_Prod_Posting_Group']),
+        category: find(['Item_Category_Code', 'Item_Category']),
         uom: find(['Base_Unit_of_Measure', 'Unit_of_Measure']),
-        inventory: find(['Inventory', 'Qty_on_Hand', 'Net_Change', 'Quantity']),
+        inventory: find(['Inventory', 'Qty_on_Hand', 'Net_Change']),
         soQty: find(['Qty_on_Sales_Order', 'Qty_on_Sales_Orders']),
         poQty: find(['Qty_on_Purch_Order', 'Qty_on_Purch_Orders']),
         reserved: find(['Reserved_Qty_on_Inventory', 'Reserved_Qty']),
-        unitCost: find(['Unit_Cost', 'Average_Cost', 'Last_Direct_Cost']),
+        location: find(['Location_Filter', 'Location_Code']),
       };
-      state._fieldMap = fieldMap;
-      console.log('Field map:', JSON.stringify(fieldMap));
+      state._fieldMap = fm;
+      console.log('📋 Field map:', JSON.stringify(fm));
+      console.log('📋 All BC365 fields:', k.join(', '));
     }
     
-    // Auto-detect product detail field names
-    let prodFieldMap = {};
-    if (productDetails.length > 0) {
-      const pk = Object.keys(productDetails[0]);
-      const pfind = (cs) => cs.find(c => pk.includes(c)) || null;
-      prodFieldMap = {
-        no: pfind(['No', 'No_', 'Item_No']),
-        desc: pfind(['Description', 'Item_Description']),
-        desc2: pfind(['Description_2', 'Description2']),
-        brand: pfind(['PRODUCT_LINE_5_BRAND', 'Brand', 'Vendor_Name']),
-        mainDetail: pfind(['Main_Detail', 'Main']),
-        plineDetail: pfind(['PLine_Detail', 'Product_Line']),
-        pline1: pfind(['PLine1_Code', 'PLine1']),
-        classDetail: pfind(['Class_Detail', 'Class']),
-        marketDetail: pfind(['Market_Detail', 'Market']),
-        mrDetail: pfind(['MR_Detail', 'MR']),
-        groupDetail: pfind(['Group_Detail', 'Group']),
-        productType: pfind(['PRODUCT_TYPE', 'Type']),
-      };
-      state._prodFieldMap = prodFieldMap;
-      console.log('Product field map:', JSON.stringify(prodFieldMap));
-    }
-    
-    // ──── STEP 5: Build location map ────
-    const locMap = {};
-    const locSet = new Set();
-    
-    if (locData.length > 0) {
-      const sampleRow = locData[0];
-      const allKeys = Object.keys(sampleRow);
-      const skipFields = new Set(['@odata.etag','No','No_','Code','Item_No','Name','Description',
-        'SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy',
-        'Variant_Code','Item_No_','Zone_Code','Bin_Code','Bin_Type_Code',
-        'Location_Code','Location_Filter','Qty_per_Unit_of_Measure',
-        'Unit_of_Measure_Code','Bin_Ranking','Fixed','Default','Dedicated',
-        'Warehouse_Class_Code','Block_Movement','Min_Qty','Max_Qty',
-        'Item_Description','Quantity','Pick_Qty','Put_away_Qty','Base_Unit_of_Measure',
-        'ATO_Components_Pick_Qty','Neg_Adjmt_Qty','Pos_Adjmt_Qty']);
-      
-      const hasLocField = allKeys.includes('Location_Code') || allKeys.includes('LocationCode');
-      const numericCols = allKeys.filter(k => !skipFields.has(k) && typeof sampleRow[k] === 'number');
-      
-      if (!hasLocField && numericCols.length > 1) {
-        // MATRIX format
-        for (const row of locData) {
-          const itemNo = f(row, 'No', 'Code', 'No_', 'Item_No') || '';
-          if (!itemNo) continue;
-          for (const locCol of numericCols) {
-            const qty = parseFloat(row[locCol]) || 0;
-            if (qty === 0) continue;
-            if (!locMap[itemNo]) locMap[itemNo] = [];
-            locMap[itemNo].push({ loc: locCol, qty, reserved: 0, available: qty });
-            locSet.add(locCol);
-          }
-        }
-      } else {
-        // FLAT format
-        for (const row of locData) {
-          const itemNo = f(row, 'Item_No', 'Item_No_', 'No', 'Code', 'No_') || '';
-          const loc = f(row, 'Location_Code', 'LocationCode', 'Location') || '';
-          const qty = parseFloat(f(row, 'Quantity', 'Inventory', 'Qty', 'Qty_Base') || 0);
-          const reserved = parseFloat(f(row, 'Reserved_Qty_on_Inventory', 'Reserved_Qty', 'Pick_Qty') || 0);
-          if (!itemNo || qty === 0) continue;
-          if (!locMap[itemNo]) locMap[itemNo] = [];
-          locMap[itemNo].push({ loc: loc || 'MAIN', qty, reserved, available: qty - reserved });
-          if (loc) locSet.add(loc);
+    // ──── STEP 4: Focus Group matching ────
+    function matchFocus(p) {
+      if (!p || focusRules.length === 0) return { fg: '', mfg: '' };
+      for (const r of focusRules) {
+        // r = [brand, main, p1, pl, cl, fg, mfg]
+        const match = (rule, val) => rule === 'any' || rule === val;
+        if (match(r[0], p.br) && match(r[1], p.mn) && match(r[2], p.p1) && match(r[3], p.pl) && match(r[4], p.cl)) {
+          return { fg: r[5], mfg: r[6] };
         }
       }
+      return { fg: '', mfg: '' };
     }
     
-    // ──── STEP 6: Merge everything into final items ────
+    // ──── STEP 5: Merge BC365 inventory + product catalog ────
+    updateLoadingProgress('🔄 Merging data', items.length, 0, ((Date.now()-t0)/1000).toFixed(1));
+    await new Promise(r => setTimeout(r, 0));
+    
     state.items = items.map(item => {
-      const no = (fieldMap.no ? item[fieldMap.no] : f(item, 'No', 'No_')) || '';
-      const inventory = parseFloat((fieldMap.inventory ? item[fieldMap.inventory] : 0) || 0);
-      const soQty = parseFloat((fieldMap.soQty ? item[fieldMap.soQty] : 0) || 0);
-      const poQty = parseFloat((fieldMap.poQty ? item[fieldMap.poQty] : 0) || 0);
-      const itemReserved = parseFloat((fieldMap.reserved ? item[fieldMap.reserved] : 0) || 0);
+      const no = (fm.no ? item[fm.no] : '') || '';
+      const inventory = parseFloat((fm.inventory ? item[fm.inventory] : 0) || 0);
+      const soQty = parseFloat((fm.soQty ? item[fm.soQty] : 0) || 0);
+      const poQty = parseFloat((fm.poQty ? item[fm.poQty] : 0) || 0);
+      const reserved = parseFloat((fm.reserved ? item[fm.reserved] : 0) || 0);
+      const available = inventory - reserved;
       
-      const locs = locMap[no] || [];
-      const locReserved = locs.reduce((s, l) => s + l.reserved, 0);
-      const totalReserved = itemReserved || locReserved;
-      const available = inventory - totalReserved;
-      
-      // Get product detail from PRODUCTmr
+      // Get product details from embedded catalog
       const pd = prodMap[no] || {};
+      const focus = matchFocus(pd);
       
       return {
         no,
-        desc: (fieldMap.desc ? item[fieldMap.desc] : '') || (prodFieldMap.desc && pd[prodFieldMap.desc]) || '',
-        desc2: (fieldMap.desc2 ? item[fieldMap.desc2] : '') || (prodFieldMap.desc2 && pd[prodFieldMap.desc2]) || '',
-        category: (fieldMap.category ? item[fieldMap.category] : '') || '',
-        uom: (fieldMap.uom ? item[fieldMap.uom] : '') || '',
-        brand: (prodFieldMap.brand && pd[prodFieldMap.brand]) || '',
-        mainDetail: (prodFieldMap.mainDetail && pd[prodFieldMap.mainDetail]) || '',
-        plineDetail: (prodFieldMap.plineDetail && pd[prodFieldMap.plineDetail]) || '',
-        pline1: (prodFieldMap.pline1 && pd[prodFieldMap.pline1]) || '',
-        classDetail: (prodFieldMap.classDetail && pd[prodFieldMap.classDetail]) || '',
-        marketDetail: (prodFieldMap.marketDetail && pd[prodFieldMap.marketDetail]) || '',
-        productType: (prodFieldMap.productType && pd[prodFieldMap.productType]) || '',
+        desc: pd.d || (fm.desc ? item[fm.desc] : '') || '',
+        desc2: pd.d2 || (fm.desc2 ? item[fm.desc2] : '') || '',
+        category: (fm.category ? item[fm.category] : '') || '',
+        uom: (fm.uom ? item[fm.uom] : '') || '',
+        brand: pd.br || '',
+        mainDetail: pd.mn || '',
+        plineDetail: pd.pl || '',
+        pline1: pd.p1 || '',
+        classDetail: pd.cl || '',
+        marketDetail: pd.mk || '',
+        mrDetail: pd.mr || '',
+        productType: pd.pt || '',
+        focusGroup: focus.fg,
+        mainFocusGroup: focus.mfg,
         inventory,
-        reserved: totalReserved,
+        reserved,
         available,
         soQty,
         poQty,
-        locations: locs.sort((a, b) => b.available - a.available),
+        locations: [],
       };
     }).filter(i => i.inventory !== 0 || i.soQty !== 0 || i.poQty !== 0);
     
@@ -1018,8 +956,10 @@ function renderItems() {
         <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">
           ${item.mainDetail ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(59,130,246,0.1);color:var(--accent);">${esc(item.mainDetail)}</span>` : ''}
           ${item.marketDetail ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,0.1);color:var(--green);">${esc(item.marketDetail)}</span>` : ''}
+          ${item.mrDetail ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(139,92,246,0.1);color:#a78bfa;">${esc(item.mrDetail)}</span>` : ''}
           ${item.pline1 ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(245,158,11,0.1);color:var(--orange);">${esc(item.pline1)}</span>` : ''}
           ${item.productType ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface3);color:var(--text2);">Type: ${esc(item.productType)}</span>` : ''}
+          ${item.focusGroup ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(236,72,153,0.1);color:#ec4899;font-weight:600;">⭐ ${esc(item.focusGroup)}</span>` : ''}
         </div>` : ''}
         
         <div class="detail-summary">
