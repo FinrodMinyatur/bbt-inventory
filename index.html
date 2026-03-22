@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BBT Stock">
+<meta name="theme-color" content="#0a0e1a">
+<title>BBT Inventory — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,300&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0e1a;
+  --surface: #111827;
+  --surface2: #1e2538;
+  --surface3: #2a3148;
+  --border: #2a3148;
+  --text: #edf0f7;
+  --text2: #7b83a0;
+  --text3: #4f5672;
+  --accent: #3b82f6;
+  --accent-glow: rgba(59,130,246,0.15);
+  --green: #10b981;
+  --green-bg: rgba(16,185,129,0.1);
+  --orange: #f59e0b;
+  --orange-bg: rgba(245,158,11,0.1);
+  --red: #ef4444;
+  --red-bg: rgba(239,68,68,0.1);
+  --radius: 14px;
+  --safe-top: env(safe-area-inset-top, 20px);
+  --safe-bottom: env(safe-area-inset-bottom, 20px);
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { height:100%; }
+body {
+  font-family:'DM Sans',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100%;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─── Auth Screen ─── */
+#authScreen {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; padding:40px 24px; text-align:center;
+  background:radial-gradient(ellipse at 50% 20%, rgba(59,130,246,0.08) 0%, transparent 60%);
+}
+.auth-logo {
+  width:72px; height:72px; border-radius:20px;
+  background:linear-gradient(135deg, var(--accent), #8b5cf6);
+  display:flex; align-items:center; justify-content:center;
+  font-size:28px; font-weight:700; color:#fff;
+  margin-bottom:28px;
+  box-shadow:0 8px 32px rgba(59,130,246,0.25);
+}
+.auth-title { font-size:26px; font-weight:700; letter-spacing:-0.5px; margin-bottom:8px; }
+.auth-sub { color:var(--text2); font-size:14px; line-height:1.6; max-width:320px; margin-bottom:32px; }
+.auth-btn {
+  width:100%; max-width:320px; padding:16px;
+  background:linear-gradient(135deg, var(--accent), #2563eb);
+  color:#fff; border:none; border-radius:12px;
+  font-size:16px; font-weight:600; cursor:pointer;
+  box-shadow:0 4px 20px rgba(59,130,246,0.3);
+  transition:all 0.2s;
+}
+.auth-btn:active { transform:scale(0.97); }
+.auth-note { margin-top:16px; font-size:11px; color:var(--text3); max-width:280px; line-height:1.5; }
+
+/* ─── App Shell ─── */
+#appShell { display:none; min-height:100vh; padding-bottom:calc(80px + var(--safe-bottom)); }
+
+/* Top bar */
+.topbar {
+  position:sticky; top:0; z-index:100;
+  padding:var(--safe-top) 16px 0;
+  background:linear-gradient(180deg, var(--bg) 70%, transparent);
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+}
+.topbar-inner {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 0;
+}
+.topbar-brand {
+  display:flex; align-items:center; gap:10px;
+}
+.topbar-dot { width:8px; height:8px; border-radius:50%; background:var(--green); flex-shrink:0; }
+.topbar-dot.offline { background:var(--red); animation:pulse 2s infinite; }
+.topbar-title { font-size:17px; font-weight:700; letter-spacing:-0.3px; }
+.topbar-actions { display:flex; gap:8px; }
+.topbar-btn {
+  width:36px; height:36px; border-radius:10px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text2); display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:16px; transition:all 0.15s;
+}
+.topbar-btn:active { background:var(--surface3); }
+.topbar-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+/* Search */
+.search-wrap {
+  margin:8px 0 4px;
+  position:relative;
+}
+.search-icon {
+  position:absolute; left:14px; top:50%; transform:translateY(-50%);
+  color:var(--text3); font-size:16px; pointer-events:none;
+}
+.search-input {
+  width:100%; padding:13px 14px 13px 42px;
+  background:var(--surface); border:1px solid var(--border);
+  color:var(--text); border-radius:12px; font-size:15px;
+  font-family:inherit; outline:none; transition:border 0.2s;
+}
+.search-input:focus { border-color:var(--accent); }
+.search-input::placeholder { color:var(--text3); }
+.search-clear {
+  position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  width:24px; height:24px; border-radius:50%; background:var(--surface2);
+  border:none; color:var(--text2); font-size:13px; cursor:pointer;
+  display:none; align-items:center; justify-content:center;
+}
+.search-clear.show { display:flex; }
+
+/* Status bar */
+.status-bar {
+  display:flex; align-items:center; gap:8px; padding:8px 0;
+  font-size:12px; color:var(--text3); overflow-x:auto;
+}
+.status-pill {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:4px 10px; border-radius:8px; white-space:nowrap;
+  font-size:11px; font-weight:500;
+}
+.status-pill.info { background:var(--accent-glow); color:var(--accent); }
+.status-pill.ok { background:var(--green-bg); color:var(--green); }
+.status-pill.warn { background:var(--orange-bg); color:var(--orange); }
+
+/* Content area */
+.content { padding:0 16px; }
+
+/* Location filter chips */
+.loc-chips {
+  display:flex; gap:6px; padding:8px 0 12px;
+  overflow-x:auto; -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
+.loc-chips::-webkit-scrollbar { display:none; }
+.loc-chip {
+  flex-shrink:0; padding:8px 14px; border-radius:10px;
+  background:var(--surface); border:1px solid var(--border);
+  color:var(--text2); font-size:13px; font-weight:500;
+  cursor:pointer; transition:all 0.15s; white-space:nowrap;
+}
+.loc-chip:active { transform:scale(0.96); }
+.loc-chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.loc-chip .chip-count {
+  display:inline-block; margin-left:4px;
+  font-size:11px; opacity:0.7;
+}
+
+/* Item cards */
+.item-list { display:flex; flex-direction:column; gap:8px; padding-bottom:24px; }
+
+.item-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px 16px;
+  cursor:pointer; transition:all 0.15s;
+  position:relative; overflow:hidden;
+}
+.item-card:active { background:var(--surface2); transform:scale(0.99); }
+.item-card-header { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+.item-no {
+  font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:600;
+  color:var(--accent); letter-spacing:0.3px;
+}
+.item-avail-badge {
+  flex-shrink:0; padding:3px 10px; border-radius:8px;
+  font-size:12px; font-weight:600;
+  font-family:'JetBrains Mono',monospace;
+}
+.item-avail-badge.instock { background:var(--green-bg); color:var(--green); }
+.item-avail-badge.low { background:var(--orange-bg); color:var(--orange); }
+.item-avail-badge.out { background:var(--red-bg); color:var(--red); }
+
+.item-desc {
+  font-size:14px; font-weight:500; margin-top:4px;
+  line-height:1.4; color:var(--text);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+.item-meta {
+  display:flex; gap:12px; margin-top:8px; flex-wrap:wrap;
+}
+.item-meta-tag {
+  font-size:11px; color:var(--text2);
+  display:flex; align-items:center; gap:4px;
+}
+.item-meta-tag .label { color:var(--text3); }
+
+/* Expanded detail */
+.item-detail { display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.item-card.expanded .item-detail { display:block; }
+
+.loc-table { width:100%; border-collapse:collapse; margin-top:8px; }
+.loc-table th {
+  font-size:10px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.8px; color:var(--text3); text-align:left;
+  padding:6px 8px; border-bottom:1px solid var(--border);
+}
+.loc-table td {
+  font-size:13px; padding:8px; border-bottom:1px solid rgba(42,49,72,0.5);
+  font-family:'JetBrains Mono',monospace;
+}
+.loc-table td:first-child { font-family:'DM Sans',sans-serif; font-weight:500; color:var(--text); }
+.loc-table tr:last-child td { border-bottom:none; }
+
+.qty-cell { text-align:right; }
+.qty-cell.positive { color:var(--green); }
+.qty-cell.zero { color:var(--text3); }
+.qty-cell.negative { color:var(--red); }
+
+/* Summary row */
+.detail-summary {
+  display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:12px;
+}
+.detail-stat {
+  background:var(--surface2); border-radius:10px; padding:10px 12px; text-align:center;
+}
+.detail-stat-label { font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+.detail-stat-val {
+  font-size:18px; font-weight:700; margin-top:2px;
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* Empty state */
+.empty-state {
+  text-align:center; padding:60px 24px;
+  color:var(--text3);
+}
+.empty-icon { font-size:48px; margin-bottom:16px; opacity:0.5; }
+.empty-text { font-size:15px; line-height:1.6; }
+
+/* Loading */
+.loading-wrap {
+  display:flex; flex-direction:column; align-items:center;
+  justify-content:center; padding:60px 24px; gap:16px;
+}
+.spinner {
+  width:32px; height:32px; border:3px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+.loading-text { font-size:13px; color:var(--text2); }
+
+/* Bottom nav */
+.bottom-nav {
+  position:fixed; bottom:0; left:0; right:0;
+  padding:8px 16px calc(8px + var(--safe-bottom));
+  background:linear-gradient(180deg, transparent, var(--bg) 30%);
+  display:flex; justify-content:space-around;
+  z-index:100;
+}
+.nav-item {
+  display:flex; flex-direction:column; align-items:center; gap:4px;
+  padding:6px 16px; border-radius:12px;
+  color:var(--text3); font-size:10px; font-weight:500;
+  cursor:pointer; transition:all 0.15s;
+  background:transparent; border:none;
+}
+.nav-item:active { transform:scale(0.92); }
+.nav-item.active { color:var(--accent); }
+.nav-icon { font-size:20px; }
+
+/* Settings panel */
+#settingsPanel {
+  display:none; padding:20px 16px;
+}
+#settingsPanel.show { display:block; }
+.settings-group { margin-bottom:24px; }
+.settings-label {
+  font-size:11px; font-weight:600; text-transform:uppercase;
+  letter-spacing:1px; color:var(--text3); margin-bottom:10px;
+}
+.settings-input {
+  width:100%; padding:13px 14px;
+  background:var(--surface); border:1px solid var(--border);
+  color:var(--text); border-radius:12px; font-size:14px;
+  font-family:inherit; outline:none;
+}
+.settings-input:focus { border-color:var(--accent); }
+.settings-note { font-size:11px; color:var(--text3); margin-top:6px; line-height:1.5; }
+.settings-save {
+  width:100%; padding:14px; margin-top:16px;
+  background:var(--accent); color:#fff; border:none;
+  border-radius:12px; font-size:15px; font-weight:600;
+  cursor:pointer;
+}
+.settings-save:active { opacity:0.85; }
+.settings-danger {
+  width:100%; padding:14px; margin-top:8px;
+  background:transparent; color:var(--red); border:1px solid var(--red);
+  border-radius:12px; font-size:14px; font-weight:500;
+  cursor:pointer;
+}
+
+/* Scroll to top */
+.scroll-top {
+  position:fixed; right:16px; bottom:calc(80px + var(--safe-bottom) + 8px);
+  width:40px; height:40px; border-radius:12px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text2); font-size:18px;
+  display:none; align-items:center; justify-content:center;
+  cursor:pointer; z-index:50;
+  box-shadow:0 4px 16px rgba(0,0,0,0.3);
+}
+.scroll-top.show { display:flex; }
+
+/* Toast */
+.toast {
+  position:fixed; top:calc(var(--safe-top) + 60px); left:16px; right:16px;
+  padding:14px 16px; border-radius:12px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text); font-size:13px; font-weight:500;
+  z-index:200; transform:translateY(-120%); opacity:0;
+  transition:all 0.3s ease;
+  box-shadow:0 8px 24px rgba(0,0,0,0.3);
+}
+.toast.show { transform:translateY(0); opacity:1; }
+.toast.error { border-color:var(--red); }
+.toast.success { border-color:var(--green); }
+
+/* Confidential watermark */
+.watermark {
+  position:fixed; bottom:calc(80px + var(--safe-bottom));
+  right:8px; font-size:8px; color:rgba(255,255,255,0.04);
+  writing-mode:vertical-rl; letter-spacing:2px;
+  text-transform:uppercase; pointer-events:none; z-index:0;
+  user-select:none;
+}
+</style>
+</head>
+<body>
+
+<!-- Auth Screen -->
+<div id="authScreen">
+  <div class="auth-logo">📦</div>
+  <div class="auth-title">BBT Inventory</div>
+  <div class="auth-sub">Real-time stock levels from BC365.<br>Available = On Hand − Reserved.<br>By warehouse location.</div>
+  <button class="auth-btn" onclick="startAuth()">
+    Sign in with Microsoft
+  </button>
+  <div class="auth-note">
+    Sign in with your company Microsoft account
+  </div>
+</div>
+
+<!-- App Shell -->
+<div id="appShell">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-brand">
+        <span class="topbar-dot" id="statusDot"></span>
+        <span class="topbar-title">BBT Inventory</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="topbar-btn" onclick="refreshData()" title="Refresh">↻</button>
+        <button class="topbar-btn" id="settingsBtn" onclick="toggleSettings()" title="Settings">⚙</button>
+      </div>
+    </div>
+    <div class="search-wrap" id="searchWrap">
+      <span class="search-icon">🔍</span>
+      <input class="search-input" id="searchInput" type="text" 
+             placeholder="Search item no. or description..." 
+             autocomplete="off" autocapitalize="off" spellcheck="false"
+             oninput="handleSearch(this.value)">
+      <button class="search-clear" id="searchClear" onclick="clearSearch()">✕</button>
+    </div>
+    <div class="status-bar" id="statusBar"></div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="content" id="mainContent">
+    <!-- Location filter chips -->
+    <div class="loc-chips" id="locChips"></div>
+    <!-- Item list -->
+    <div id="itemList"></div>
+  </div>
+
+  <!-- Settings Panel -->
+  <div id="settingsPanel">
+    <div class="settings-group">
+      <div class="settings-label">Azure AD Client ID</div>
+      <input class="settings-input" id="cfgClientId" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="0b428887-058a-4c4b-b4b1-86d1fbd8a6a3">
+      <div class="settings-note">Pre-configured. Same App Registration as Sales Analytics tool.</div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">Company Name in BC365</div>
+      <input class="settings-input" id="cfgCompany" type="text" placeholder="My Company" value="My Company">
+      <div class="settings-note">Exact company name as shown in Business Central.</div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">BC365 Environment</div>
+      <input class="settings-input" id="cfgEnv" type="text" placeholder="Production" value="Production">
+    </div>
+    <button class="settings-save" onclick="saveSettings()">Save & Connect</button>
+    <button class="settings-danger" onclick="clearAllData()">Clear All Data & Sign Out</button>
+    <div style="margin-top:32px; text-align:center;">
+      <div style="font-size:11px; color:var(--text3); line-height:1.6;">
+        BBT Inventory v1.0<br>
+        Internal use only. All data is confidential.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Nav -->
+  <div class="bottom-nav">
+    <button class="nav-item active" id="navStock" onclick="switchTab('stock')">
+      <span class="nav-icon">📦</span>
+      Stock
+    </button>
+    <button class="nav-item" id="navLow" onclick="switchTab('low')">
+      <span class="nav-icon">⚠️</span>
+      Low Stock
+    </button>
+    <button class="nav-item" id="navSettings" onclick="switchTab('settings')">
+      <span class="nav-icon">⚙️</span>
+      Settings
+    </button>
+  </div>
+
+  <button class="scroll-top" id="scrollTopBtn" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+  <div class="watermark">CONFIDENTIAL — INTERNAL USE ONLY</div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════
+//  CONFIG & STATE — No secrets in code
+// ═══════════════════════════════════════════
+const TENANT_ID = 'ba142cc1-057e-4966-aeb3-b5c1fd550587';
+const BC_BASE   = 'https://api.businesscentral.dynamics.com/v2.0';
+
+let state = {
+  token: null,
+  tokenExpiry: 0,
+  clientId: '0b428887-058a-4c4b-b4b1-86d1fbd8a6a3',
+  company: 'My Company',
+  env: 'Production',
+  items: [],          // master item list with inventory
+  locations: [],      // unique location codes
+  activeLocation: 'ALL',
+  searchQuery: '',
+  currentTab: 'stock',
+  lastRefresh: null,
+  isLoading: false,
+};
+
+// ═══════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+  
+  // Check for OAuth redirect
+  if (window.location.hash) {
+    handleAuthRedirect();
+  }
+  
+  // If we have a valid token, go to app
+  if (state.token && Date.now() < state.tokenExpiry) {
+    showApp();
+    refreshData();
+  }
+
+  // Scroll to top button
+  window.addEventListener('scroll', () => {
+    document.getElementById('scrollTopBtn').classList.toggle('show', window.scrollY > 400);
+  });
+});
+
+// ═══════════════════════════════════════════
+//  AUTH — Azure AD OAuth 2.0 Implicit
+// ═══════════════════════════════════════════
+function startAuth() {
+  if (!state.clientId) {
+    // Show settings first
+    showApp();
+    switchTab('settings');
+    showToast('Please configure Azure AD Client ID first', 'error');
+    return;
+  }
+  
+  const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
+  const scope = encodeURIComponent('https://api.businesscentral.dynamics.com/.default');
+  const nonce = Math.random().toString(36).substr(2);
+  
+  const authUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize?`
+    + `client_id=${state.clientId}`
+    + `&response_type=token`
+    + `&redirect_uri=${redirectUri}`
+    + `&scope=${scope}`
+    + `&nonce=${nonce}`
+    + `&prompt=login`;
+  
+  window.location.href = authUrl;
+}
+
+function handleAuthRedirect() {
+  const hash = window.location.hash.substring(1);
+  const params = new URLSearchParams(hash);
+  
+  if (params.has('access_token')) {
+    state.token = params.get('access_token');
+    const expiresIn = parseInt(params.get('expires_in') || '3600');
+    state.tokenExpiry = Date.now() + (expiresIn * 1000);
+    
+    // Store securely in sessionStorage only (not localStorage)
+    sessionStorage.setItem('bbt_token', state.token);
+    sessionStorage.setItem('bbt_token_expiry', state.tokenExpiry.toString());
+    
+    // Clean URL
+    history.replaceState(null, '', window.location.pathname);
+    
+    showApp();
+    refreshData();
+    showToast('Connected to BC365', 'success');
+  } else if (params.has('error')) {
+    showToast(`Auth error: ${params.get('error_description') || params.get('error')}`, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════
+//  BC365 OData CALLS
+// ═══════════════════════════════════════════
+function buildUrl(endpoint, params) {
+  const company = encodeURIComponent(state.company);
+  let url = `${BC_BASE}/${TENANT_ID}/${state.env}/ODataV4/Company('${company}')/${endpoint}`;
+  if (params) url += '?' + params;
+  return url;
+}
+
+async function bcFetch(endpoint, params) {
+  if (!state.token || Date.now() >= state.tokenExpiry) {
+    showToast('Session expired. Please sign in again.', 'error');
+    signOut();
+    return null;
+  }
+  
+  const url = buildUrl(endpoint, params);
+  const resp = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${state.token}`,
+      'Accept': 'application/json',
+      'Prefer': 'odata.maxpagesize=5000'
+    }
+  });
+  
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      showToast('Session expired', 'error');
+      signOut();
+      return null;
+    }
+    throw new Error(`BC365 ${resp.status}: ${resp.statusText}`);
+  }
+  
+  return resp.json();
+}
+
+async function fetchAllPages(endpoint, params) {
+  let allValues = [];
+  let url = buildUrl(endpoint, params);
+  
+  while (url) {
+    const resp = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${state.token}`,
+        'Accept': 'application/json',
+        'Prefer': 'odata.maxpagesize=5000'
+      }
+    });
+    
+    if (!resp.ok) {
+      if (resp.status === 401) { signOut(); return []; }
+      throw new Error(`BC365 ${resp.status}`);
+    }
+    
+    const data = await resp.json();
+    allValues = allValues.concat(data.value || []);
+    url = data['@odata.nextLink'] || null;
+  }
+  
+  return allValues;
+}
+
+// ═══════════════════════════════════════════
+//  DATA REFRESH
+// ═══════════════════════════════════════════
+async function refreshData() {
+  if (state.isLoading) return;
+  state.isLoading = true;
+  
+  showLoading();
+  updateStatusDot('loading');
+  
+  try {
+    // 1) Fetch Items with inventory fields
+    const items = await fetchAllPages('ItemsListPBI',
+      '$select=No,Description,Inventory,Qty_on_Sales_Order,Qty_on_Purch_Order,Item_Category_Code,Base_Unit_of_Measure'
+    );
+    
+    // 2) Fetch Items by Location for location breakdown
+    const locData = await fetchAllPages('Items_by_Location',
+      '$select=Code,Location_Code,Inventory_Qty,Reserved_Qty_on_Inventory'
+    );
+    
+    // Build location map: itemNo -> [{loc, qty, reserved}]
+    const locMap = {};
+    const locSet = new Set();
+    
+    for (const row of locData) {
+      const itemNo = row.Code || row.No || '';
+      const loc = row.Location_Code || '';
+      const qty = parseFloat(row.Inventory_Qty) || 0;
+      const reserved = parseFloat(row.Reserved_Qty_on_Inventory) || 0;
+      
+      if (!itemNo || qty === 0) continue;
+      
+      if (!locMap[itemNo]) locMap[itemNo] = [];
+      locMap[itemNo].push({ loc, qty, reserved, available: qty - reserved });
+      if (loc) locSet.add(loc);
+    }
+    
+    // Merge into items
+    state.items = items.map(item => {
+      const no = item.No || '';
+      const inventory = parseFloat(item.Inventory) || 0;
+      const soQty = parseFloat(item.Qty_on_Sales_Order) || 0;
+      const poQty = parseFloat(item.Qty_on_Purch_Order) || 0;
+      const locs = locMap[no] || [];
+      const totalReserved = locs.reduce((s, l) => s + l.reserved, 0);
+      const available = inventory - totalReserved;
+      
+      return {
+        no,
+        desc: item.Description || '',
+        category: item.Item_Category_Code || '',
+        uom: item.Base_Unit_of_Measure || '',
+        inventory,
+        reserved: totalReserved,
+        available,
+        soQty,
+        poQty,
+        locations: locs.sort((a, b) => b.available - a.available),
+      };
+    }).filter(i => i.inventory !== 0 || i.soQty !== 0 || i.poQty !== 0);
+    
+    // Sort by item no
+    state.items.sort((a, b) => a.no.localeCompare(b.no));
+    
+    // Locations
+    state.locations = Array.from(locSet).sort();
+    
+    state.lastRefresh = new Date();
+    updateStatusDot('online');
+    updateStatusBar();
+    renderLocChips();
+    renderItems();
+    showToast(`Loaded ${state.items.length} items`, 'success');
+    
+  } catch (err) {
+    console.error('Refresh error:', err);
+    updateStatusDot('offline');
+    
+    // If no client ID configured, prompt settings
+    if (!state.clientId) {
+      showSettingsPrompt();
+    } else {
+      showToast(`Error: ${err.message}`, 'error');
+      renderDemoData(); // Show demo placeholder
+    }
+  } finally {
+    state.isLoading = false;
+  }
+}
+
+// ═══════════════════════════════════════════
+//  DEMO DATA (when not connected)
+// ═══════════════════════════════════════════
+function renderDemoData() {
+  const demoItems = [
+    { no:'DEMO-001', desc:'[Demo] Connect BC365 to see live data', category:'DEMO', uom:'PCS', inventory:100, reserved:25, available:75, soQty:10, poQty:50,
+      locations:[{loc:'WH-BKK', qty:60, reserved:15, available:45},{loc:'WH-EEC', qty:40, reserved:10, available:30}]},
+    { no:'DEMO-002', desc:'[Demo] Configure Azure AD Client ID in Settings', category:'DEMO', uom:'PCS', inventory:50, reserved:48, available:2, soQty:5, poQty:0,
+      locations:[{loc:'WH-BKK', qty:50, reserved:48, available:2}]},
+    { no:'DEMO-003', desc:'[Demo] Low stock alert example', category:'DEMO', uom:'PCS', inventory:10, reserved:10, available:0, soQty:3, poQty:20,
+      locations:[{loc:'WH-BKK', qty:10, reserved:10, available:0}]},
+  ];
+  
+  state.items = demoItems;
+  state.locations = ['WH-BKK','WH-EEC'];
+  renderLocChips();
+  renderItems();
+  updateStatusBar();
+}
+
+function showSettingsPrompt() {
+  document.getElementById('itemList').innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon">⚙️</div>
+      <div class="empty-text">
+        <strong>Setup Required</strong><br><br>
+        Go to <strong>Settings</strong> tab and enter your<br>
+        Azure AD Client ID to connect to BC365.<br><br>
+        <span style="font-size:12px;color:var(--text3)">
+          IT needs to register an Azure AD App (SPA type)<br>
+          with redirect URI pointing to this page.<br>
+          Estimated setup time: ~30 minutes.
+        </span>
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════
+//  RENDERING
+// ═══════════════════════════════════════════
+function renderLocChips() {
+  const el = document.getElementById('locChips');
+  const counts = {};
+  const filtered = getFilteredItems(true); // ignore location filter
+  
+  for (const item of state.items) {
+    for (const loc of item.locations) {
+      counts[loc.loc] = (counts[loc.loc] || 0) + 1;
+    }
+  }
+  
+  let html = `<div class="loc-chip ${state.activeLocation === 'ALL' ? 'active' : ''}" 
+               onclick="filterLocation('ALL')">All<span class="chip-count">${state.items.length}</span></div>`;
+  
+  for (const loc of state.locations) {
+    const isActive = state.activeLocation === loc ? 'active' : '';
+    html += `<div class="loc-chip ${isActive}" onclick="filterLocation('${loc}')">
+              ${loc}<span class="chip-count">${counts[loc] || 0}</span></div>`;
+  }
+  
+  el.innerHTML = html;
+}
+
+function renderItems() {
+  const el = document.getElementById('itemList');
+  const items = getFilteredItems();
+  
+  if (items.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-text">No items found${state.searchQuery ? ` for "${state.searchQuery}"` : ''}</div>
+      </div>
+    `;
+    return;
+  }
+  
+  // For low stock tab, filter available <= 5 and inventory > 0
+  const displayItems = state.currentTab === 'low' 
+    ? items.filter(i => i.available <= 5 && i.inventory > 0)
+    : items;
+  
+  if (displayItems.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">✅</div>
+        <div class="empty-text">No low stock alerts.<br>All items have sufficient availability.</div>
+      </div>
+    `;
+    return;
+  }
+  
+  let html = '<div class="item-list">';
+  
+  for (const item of displayItems) {
+    const badgeClass = item.available <= 0 ? 'out' : item.available <= 5 ? 'low' : 'instock';
+    const badgeText = item.available <= 0 ? 'OUT' : `${fmtNum(item.available)}`;
+    
+    html += `
+    <div class="item-card" onclick="toggleExpand(this)">
+      <div class="item-card-header">
+        <div class="item-no">${esc(item.no)}</div>
+        <div class="item-avail-badge ${badgeClass}">${badgeText}</div>
+      </div>
+      <div class="item-desc">${esc(item.desc)}</div>
+      <div class="item-meta">
+        <div class="item-meta-tag"><span class="label">Cat:</span> ${esc(item.category || '—')}</div>
+        <div class="item-meta-tag"><span class="label">UoM:</span> ${esc(item.uom)}</div>
+        <div class="item-meta-tag"><span class="label">On PO:</span> ${fmtNum(item.poQty)}</div>
+      </div>
+      
+      <div class="item-detail">
+        <div class="detail-summary">
+          <div class="detail-stat">
+            <div class="detail-stat-label">On Hand</div>
+            <div class="detail-stat-val">${fmtNum(item.inventory)}</div>
+          </div>
+          <div class="detail-stat">
+            <div class="detail-stat-label">Reserved</div>
+            <div class="detail-stat-val" style="color:var(--orange)">${fmtNum(item.reserved)}</div>
+          </div>
+          <div class="detail-stat">
+            <div class="detail-stat-label">Available</div>
+            <div class="detail-stat-val" style="color:${item.available > 0 ? 'var(--green)' : 'var(--red)'}">${fmtNum(item.available)}</div>
+          </div>
+        </div>
+        
+        ${item.locations.length > 0 ? `
+        <table class="loc-table">
+          <thead>
+            <tr><th>Location</th><th style="text-align:right">On Hand</th><th style="text-align:right">Reserved</th><th style="text-align:right">Available</th></tr>
+          </thead>
+          <tbody>
+            ${item.locations.map(l => `
+            <tr>
+              <td>${esc(l.loc || 'BLANK')}</td>
+              <td class="qty-cell">${fmtNum(l.qty)}</td>
+              <td class="qty-cell ${l.reserved > 0 ? 'negative' : 'zero'}">${fmtNum(l.reserved)}</td>
+              <td class="qty-cell ${l.available > 0 ? 'positive' : l.available < 0 ? 'negative' : 'zero'}">${fmtNum(l.available)}</td>
+            </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ` : '<div style="font-size:12px;color:var(--text3);margin-top:8px">No location breakdown available</div>'}
+        
+        <div style="margin-top:12px; font-size:11px; color:var(--text3);">
+          SO Qty: ${fmtNum(item.soQty)} &nbsp;|&nbsp; PO Qty: ${fmtNum(item.poQty)}
+        </div>
+      </div>
+    </div>
+    `;
+  }
+  
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function showLoading() {
+  document.getElementById('itemList').innerHTML = `
+    <div class="loading-wrap">
+      <div class="spinner"></div>
+      <div class="loading-text">Fetching from BC365...</div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════
+//  FILTERING & SEARCH
+// ═══════════════════════════════════════════
+function getFilteredItems(ignoreLocation) {
+  let items = state.items;
+  
+  // Location filter
+  if (!ignoreLocation && state.activeLocation !== 'ALL') {
+    items = items.filter(i => i.locations.some(l => l.loc === state.activeLocation));
+  }
+  
+  // Search
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    items = items.filter(i => 
+      i.no.toLowerCase().includes(q) || 
+      i.desc.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q)
+    );
+  }
+  
+  return items;
+}
+
+function handleSearch(val) {
+  state.searchQuery = val.trim();
+  document.getElementById('searchClear').classList.toggle('show', val.length > 0);
+  renderItems();
+}
+
+function clearSearch() {
+  document.getElementById('searchInput').value = '';
+  state.searchQuery = '';
+  document.getElementById('searchClear').classList.remove('show');
+  renderItems();
+}
+
+function filterLocation(loc) {
+  state.activeLocation = loc;
+  renderLocChips();
+  renderItems();
+}
+
+// ═══════════════════════════════════════════
+//  UI INTERACTIONS
+// ═══════════════════════════════════════════
+function toggleExpand(el) {
+  // Collapse others
+  document.querySelectorAll('.item-card.expanded').forEach(c => {
+    if (c !== el) c.classList.remove('expanded');
+  });
+  el.classList.toggle('expanded');
+}
+
+function switchTab(tab) {
+  state.currentTab = tab;
+  
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`nav${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
+  
+  const mainContent = document.getElementById('mainContent');
+  const settingsPanel = document.getElementById('settingsPanel');
+  const searchWrap = document.getElementById('searchWrap');
+  
+  if (tab === 'settings') {
+    mainContent.style.display = 'none';
+    settingsPanel.classList.add('show');
+    searchWrap.style.display = 'none';
+    document.getElementById('settingsBtn').classList.add('active');
+  } else {
+    mainContent.style.display = 'block';
+    settingsPanel.classList.remove('show');
+    searchWrap.style.display = 'block';
+    document.getElementById('settingsBtn').classList.remove('active');
+    renderItems();
+  }
+}
+
+function toggleSettings() {
+  switchTab(state.currentTab === 'settings' ? 'stock' : 'settings');
+}
+
+function updateStatusDot(status) {
+  const dot = document.getElementById('statusDot');
+  dot.className = 'topbar-dot';
+  if (status === 'offline') dot.classList.add('offline');
+  if (status === 'loading') dot.style.background = 'var(--orange)';
+  else dot.style.background = '';
+}
+
+function updateStatusBar() {
+  const bar = document.getElementById('statusBar');
+  const items = getFilteredItems();
+  const lowCount = state.items.filter(i => i.available <= 5 && i.inventory > 0).length;
+  const outCount = state.items.filter(i => i.available <= 0 && i.inventory > 0).length;
+  
+  let html = `<span class="status-pill info">${items.length} items</span>`;
+  if (lowCount > 0) html += `<span class="status-pill warn">⚠ ${lowCount} low</span>`;
+  if (outCount > 0) html += `<span class="status-pill" style="background:var(--red-bg);color:var(--red)">✕ ${outCount} out</span>`;
+  if (state.lastRefresh) {
+    const ago = getTimeAgo(state.lastRefresh);
+    html += `<span style="margin-left:auto;font-size:11px;color:var(--text3)">Updated ${ago}</span>`;
+  }
+  
+  bar.innerHTML = html;
+}
+
+function showApp() {
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('appShell').style.display = 'block';
+}
+
+// ═══════════════════════════════════════════
+//  SETTINGS & STORAGE
+// ═══════════════════════════════════════════
+function loadSettings() {
+  const DEFAULT_CLIENT_ID = '0b428887-058a-4c4b-b4b1-86d1fbd8a6a3';
+  state.clientId = localStorage.getItem('bbt_client_id') || DEFAULT_CLIENT_ID;
+  state.company = localStorage.getItem('bbt_company') || 'My Company';
+  state.env = localStorage.getItem('bbt_env') || 'Production';
+  state.token = sessionStorage.getItem('bbt_token') || null;
+  state.tokenExpiry = parseInt(sessionStorage.getItem('bbt_token_expiry') || '0');
+  
+  // Populate fields
+  setTimeout(() => {
+    const el1 = document.getElementById('cfgClientId');
+    const el2 = document.getElementById('cfgCompany');
+    const el3 = document.getElementById('cfgEnv');
+    if (el1) el1.value = state.clientId;
+    if (el2) el2.value = state.company;
+    if (el3) el3.value = state.env;
+  }, 100);
+}
+
+function saveSettings() {
+  const clientId = document.getElementById('cfgClientId').value.trim();
+  const company = document.getElementById('cfgCompany').value.trim();
+  const env = document.getElementById('cfgEnv').value.trim();
+  
+  if (!clientId) {
+    showToast('Client ID is required', 'error');
+    return;
+  }
+  
+  state.clientId = clientId;
+  state.company = company || 'My Company';
+  state.env = env || 'Production';
+  
+  localStorage.setItem('bbt_client_id', state.clientId);
+  localStorage.setItem('bbt_company', state.company);
+  localStorage.setItem('bbt_env', state.env);
+  
+  showToast('Settings saved. Redirecting to sign in...', 'success');
+  setTimeout(() => startAuth(), 1500);
+}
+
+function clearAllData() {
+  if (!confirm('Clear all stored settings and sign out?')) return;
+  localStorage.removeItem('bbt_client_id');
+  localStorage.removeItem('bbt_company');
+  localStorage.removeItem('bbt_env');
+  sessionStorage.clear();
+  state.token = null;
+  state.clientId = '';
+  window.location.reload();
+}
+
+function signOut() {
+  sessionStorage.clear();
+  state.token = null;
+  state.tokenExpiry = 0;
+  window.location.reload();
+}
+
+// ═══════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════
+function fmtNum(n) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function getTimeAgo(date) {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type || ''} show`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// Prevent screenshot / copy on sensitive data (extra layer)
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// Auto-refresh every 5 minutes if app is visible
+setInterval(() => {
+  if (!document.hidden && state.token && Date.now() < state.tokenExpiry) {
+    refreshData();
+  }
+}, 5 * 60 * 1000);
+</script>
+</body>
+</html>
