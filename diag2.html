@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BC365 Location Diagnostic</title>
+<style>body{background:#111;color:#eee;font-family:monospace;padding:16px;font-size:13px}pre{white-space:pre-wrap;word-break:break-all;background:#1a1a2e;padding:12px;border-radius:8px;max-height:60vh;overflow:auto}h2{color:#3b82f6;margin:16px 0 8px}.ok{color:#10b981}.err{color:#ef4444}.warn{color:#f59e0b}</style>
+</head><body>
+<h1>Location Diagnostic</h1>
+<div id="out">Authenticating...</div>
+<script>
+const TENANT = 'ba142cc1-057e-4966-aeb3-b5c1fd550587';
+const CLIENT = '0b428887-058a-4c4b-b4b1-86d1fbd8a6a3';
+const BASE = 'https://api.businesscentral.dynamics.com/v2.0';
+const COMPANY = "My Company";
+const ENV = "Production";
+const out = document.getElementById('out');
+function log(html) { out.innerHTML += html + '<br>'; }
+
+if (window.location.hash) {
+  const params = new URLSearchParams(window.location.hash.substring(1));
+  const token = params.get('access_token');
+  if (token) { history.replaceState(null, '', window.location.pathname); runDiag(token); }
+} else {
+  const redirect = encodeURIComponent(window.location.origin + window.location.pathname);
+  window.location.href = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize?client_id=${CLIENT}&response_type=token&redirect_uri=${redirect}&scope=${encodeURIComponent('https://api.businesscentral.dynamics.com/.default')}&prompt=login`;
+}
+
+async function testEndpoint(token, name, endpoint, params) {
+  log(`<h2>Testing: ${name}</h2>`);
+  const url = `${BASE}/${TENANT}/${ENV}/ODataV4/Company('${encodeURIComponent(COMPANY)}')/${endpoint}${params ? '?' + params : ''}`;
+  log(`<span class="warn">${url}</span>`);
+  try {
+    const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' } });
+    log(`Status: ${resp.ok ? '<span class="ok">' + resp.status + '</span>' : '<span class="err">' + resp.status + '</span>'}`);
+    const data = await resp.json();
+    if (data.error) { log(`<span class="err">${data.error.message}</span>`); return null; }
+    const rows = data.value || [];
+    log(`Rows: <span class="ok">${rows.length}</span>`);
+    if (rows.length > 0) {
+      log(`Columns: ${Object.keys(rows[0]).join(', ')}`);
+      log('<pre>' + JSON.stringify(rows[0], null, 2) + '</pre>');
+    }
+    return rows;
+  } catch(e) { log(`<span class="err">${e.message}</span>`); return null; }
+}
+
+async function runDiag(token) {
+  out.innerHTML = '';
+  
+  // Test 1: Item_Card_Excel with Location_Filter
+  await testEndpoint(token, 'Item_Card_Excel with Location_Filter=AP (top 2)', 
+    'Item_Card_Excel', "$filter=Location_Filter eq 'AP'&$select=No,Description,Inventory,Location_Filter&$top=2");
+  
+  // Test 2: ItemLedgerEntries query (flat with Location_Code)
+  await testEndpoint(token, 'ItemLedgerEntries query (top 5)',
+    'ItemLedgerEntries', '$top=5');
+  
+  // Test 3: Bin_Contents_List_Excel  
+  await testEndpoint(token, 'Bin_Contents_List_Excel (top 3)',
+    'Bin_Contents_List_Excel', '$top=3');
+
+  // Test 4: Item_Card_Excel - just check Location_Filter field
+  await testEndpoint(token, 'Item_Card_Excel BJ000022 inventory fields',
+    'Item_Card_Excel', "$filter=No eq 'BJ000022'&$select=No,Inventory,Reserved_Qty_on_Inventory,Qty_on_Sales_Order,Qty_on_Purch_Order,Location_Filter");
+
+  log('<br><span class="ok">📸 Screenshot ALL of this and send to Claude</span>');
+}
+</script></body></html>
