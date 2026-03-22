@@ -700,6 +700,27 @@ async function refreshData() {
       };
     }).filter(i => i.inventory !== 0 || i.soQty !== 0 || i.poQty !== 0);
     
+    // DEBUG: If no items after filter, show raw data sample
+    if (state.items.length === 0 && items.length > 0) {
+      const sample = items[0];
+      const keys = Object.keys(sample);
+      const debugInfo = `Got ${items.length} raw items but 0 after filter.\n\nField names: ${keys.join(', ')}\n\nSample row:\n${keys.map(k => k + ' = ' + JSON.stringify(sample[k])).join('\n')}`;
+      
+      document.getElementById('itemList').innerHTML = `
+        <div style="padding:16px;">
+          <div style="background:var(--surface2);border:1px solid var(--orange);border-radius:12px;padding:16px;">
+            <div style="font-size:13px;font-weight:600;color:var(--orange);margin-bottom:8px;">🔧 Debug: Data received but field mapping needs adjustment</div>
+            <pre style="font-size:10px;color:var(--text2);white-space:pre-wrap;word-break:break-all;max-height:400px;overflow:auto;font-family:'JetBrains Mono',monospace;line-height:1.6;">${debugInfo}</pre>
+            <div style="font-size:11px;color:var(--text3);margin-top:12px;">Screenshot this and send to Ben/Claude to fix field mapping.</div>
+          </div>
+        </div>
+      `;
+      state.lastRefresh = new Date();
+      updateStatusDot('online');
+      updateStatusBar();
+      return;
+    }
+    
     // Sort by item no
     state.items.sort((a, b) => a.no.localeCompare(b.no));
     
@@ -717,13 +738,17 @@ async function refreshData() {
     console.error('Refresh error:', err);
     updateStatusDot('offline');
     
-    // If no client ID configured, prompt settings
-    if (!state.clientId) {
-      showSettingsPrompt();
-    } else {
-      showToast(`Error: ${err.message}`, 'error');
-      renderDemoData(); // Show demo placeholder
-    }
+    // Show detailed error on screen
+    document.getElementById('itemList').innerHTML = `
+      <div style="padding:16px;">
+        <div style="background:var(--surface2);border:1px solid var(--red);border-radius:12px;padding:16px;">
+          <div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:8px;">❌ API Error</div>
+          <pre style="font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',monospace;line-height:1.6;">${err.message}</pre>
+          <div style="font-size:11px;color:var(--text3);margin-top:12px;">Screenshot this and send to Claude to fix.</div>
+        </div>
+      </div>
+    `;
+    showToast(`Error: ${err.message}`, 'error');
   } finally {
     state.isLoading = false;
   }
