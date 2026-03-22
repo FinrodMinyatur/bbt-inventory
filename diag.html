@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BC365 API Diagnostic</title>
+<style>body{background:#111;color:#eee;font-family:monospace;padding:16px;font-size:13px}pre{white-space:pre-wrap;word-break:break-all;background:#1a1a2e;padding:12px;border-radius:8px;max-height:80vh;overflow:auto}h2{color:#3b82f6;margin:16px 0 8px}.ok{color:#10b981}.err{color:#ef4444}.warn{color:#f59e0b}</style>
+</head><body>
+<h1>BC365 API Diagnostic</h1>
+<div id="out">Authenticating...</div>
+<script>
+const TENANT = 'ba142cc1-057e-4966-aeb3-b5c1fd550587';
+const CLIENT = '0b428887-058a-4c4b-b4b1-86d1fbd8a6a3';
+const BASE = 'https://api.businesscentral.dynamics.com/v2.0';
+const COMPANY = "My Company";
+const ENV = "Production";
+
+const out = document.getElementById('out');
+function log(html) { out.innerHTML += html + '<br>'; }
+
+// Check for token in hash
+if (window.location.hash) {
+  const params = new URLSearchParams(window.location.hash.substring(1));
+  const token = params.get('access_token');
+  if (token) {
+    history.replaceState(null, '', window.location.pathname);
+    runDiagnostic(token);
+  }
+} else {
+  // Redirect to login
+  const redirect = encodeURIComponent(window.location.origin + window.location.pathname);
+  const scope = encodeURIComponent('https://api.businesscentral.dynamics.com/.default');
+  window.location.href = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize?client_id=${CLIENT}&response_type=token&redirect_uri=${redirect}&scope=${scope}&prompt=login`;
+}
+
+async function runDiagnostic(token) {
+  out.innerHTML = '';
+  log('<h2>1. Testing Items_by_Location (first 3 rows)</h2>');
+  
+  try {
+    const url = `${BASE}/${TENANT}/${ENV}/ODataV4/Company('${encodeURIComponent(COMPANY)}')/Items_by_Location?$top=3`;
+    log(`URL: <span class="warn">${url}</span>`);
+    
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
+    });
+    
+    log(`Status: ${resp.ok ? '<span class="ok">' + resp.status + '</span>' : '<span class="err">' + resp.status + '</span>'}`);
+    
+    const data = await resp.json();
+    
+    if (data.error) {
+      log(`<span class="err">ERROR: ${data.error.message}</span>`);
+    } else {
+      const rows = data.value || [];
+      log(`Rows returned: <span class="ok">${rows.length}</span>`);
+      
+      if (rows.length > 0) {
+        const keys = Object.keys(rows[0]);
+        log(`<h2>Column names (${keys.length} total):</h2>`);
+        log('<pre>' + keys.join('\n') + '</pre>');
+        
+        log('<h2>First row (all fields):</h2>');
+        log('<pre>' + JSON.stringify(rows[0], null, 2) + '</pre>');
+        
+        if (rows.length > 1) {
+          log('<h2>Second row:</h2>');
+          log('<pre>' + JSON.stringify(rows[1], null, 2) + '</pre>');
+        }
+        if (rows.length > 2) {
+          log('<h2>Third row:</h2>');
+          log('<pre>' + JSON.stringify(rows[2], null, 2) + '</pre>');
+        }
+      }
+    }
+  } catch(e) {
+    log(`<span class="err">FETCH ERROR: ${e.message}</span>`);
+  }
+  
+  // Also test Item_Card_Excel first row for comparison
+  log('<h2>2. Testing Item_Card_Excel (first 1 row)</h2>');
+  try {
+    const url2 = `${BASE}/${TENANT}/${ENV}/ODataV4/Company('${encodeURIComponent(COMPANY)}')/Item_Card_Excel?$top=1`;
+    const resp2 = await fetch(url2, {
+      headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
+    });
+    const data2 = await resp2.json();
+    if (data2.value && data2.value.length > 0) {
+      const keys2 = Object.keys(data2.value[0]);
+      log(`Item_Card_Excel columns (${keys2.length}):`);
+      log('<pre>' + keys2.join('\n') + '</pre>');
+    }
+  } catch(e) {
+    log(`<span class="err">${e.message}</span>`);
+  }
+  
+  log('<br><span class="ok">📸 Screenshot ALL of this and send to Claude</span>');
+}
+</script>
+</body></html>
