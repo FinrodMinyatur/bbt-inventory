@@ -352,7 +352,7 @@ body {
   <div class="auth-logo">📦</div>
   <div class="auth-title">BBT Inventory</div>
   <div class="auth-sub">Real-time stock levels from BC365.<br>Available = On Hand − Reserved.<br>By warehouse location.</div>
-  <button class="auth-btn" onclick="startAuth()">
+  <button class="auth-btn" onclick="doSignIn(this)">
     Sign in with Microsoft
   </button>
   <div class="auth-note">
@@ -491,27 +491,53 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════
 //  AUTH — Azure AD OAuth 2.0 Implicit
 // ═══════════════════════════════════════════
+function doSignIn(btn) {
+  btn.textContent = 'Redirecting to Microsoft...';
+  btn.style.opacity = '0.6';
+  btn.disabled = true;
+  // Small delay so user sees the text change before redirect
+  setTimeout(() => {
+    try {
+      startAuth();
+    } catch(e) {
+      btn.textContent = 'Error: ' + e.message;
+      btn.style.opacity = '1';
+      btn.style.background = 'var(--red)';
+    }
+  }, 200);
+}
+
 function startAuth() {
   if (!state.clientId) {
-    // Show settings first
     showApp();
     switchTab('settings');
     showToast('Please configure Azure AD Client ID first', 'error');
     return;
   }
   
-  const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
+  // Build redirect URI — must match EXACTLY what's registered in Azure AD
+  let redirectUri = window.location.origin + window.location.pathname;
+  // Remove trailing index.html if present
+  redirectUri = redirectUri.replace(/\/index\.html$/, '/');
+  // Ensure trailing slash for GitHub Pages
+  if (!redirectUri.endsWith('/')) redirectUri += '/';
+  
   const scope = encodeURIComponent('https://api.businesscentral.dynamics.com/.default');
   const nonce = Math.random().toString(36).substr(2);
   
   const authUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize?`
     + `client_id=${state.clientId}`
     + `&response_type=token`
-    + `&redirect_uri=${redirectUri}`
+    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
     + `&scope=${scope}`
     + `&nonce=${nonce}`
     + `&prompt=login`;
   
+  // Debug: show the URL being used (remove this later)
+  console.log('Auth URL:', authUrl);
+  console.log('Redirect URI:', redirectUri);
+  
+  // Navigate to Microsoft login
   window.location.href = authUrl;
 }
 
