@@ -1202,6 +1202,7 @@ function toggleInStock() {
     btn.style.borderColor = 'var(--border)';
     btn.style.color = 'var(--text2)';
   }
+  populateFilterDropdowns('stock');
   renderItems();
   updateStatusBar();
   updateFilterStatus();
@@ -1239,70 +1240,78 @@ function updateFilterStatus() {
 function populateFilterDropdowns(changedFilter) {
   const bm = state._brandMap || {};
   let base = state.items;
-  
-  // Apply in-stock filter to base
   if (state.inStockOnly) base = base.filter(i => i.available > 0);
   
-  // Read current filter values
+  // Read current values BEFORE any DOM changes
   const fBrand = document.getElementById('filterBrand')?.value || '';
   const fPLine = document.getElementById('filterPLine')?.value || '';
   const fPLine1 = document.getElementById('filterPLine1')?.value || '';
   
-  // Cascade: each level filters from the one above
+  // Cascade filtering
   const afterBrand = fBrand ? base.filter(i => i.brand === fBrand) : base;
   const afterPLine = fPLine ? afterBrand.filter(i => i.plineDetail === fPLine) : afterBrand;
   const afterPLine1 = fPLine1 ? afterPLine.filter(i => i.pline1 === fPLine1) : afterPLine;
   
-  // Count per value for each level
   function countBy(arr, field) {
-    const map = {};
-    for (const i of arr) {
-      const v = i[field];
-      if (v) map[v] = (map[v] || 0) + 1;
-    }
-    return map;
+    const m = {};
+    for (const i of arr) { const v = i[field]; if (v) m[v] = (m[v] || 0) + 1; }
+    return m;
   }
   
-  const brandCounts = countBy(base, 'brand');
-  const plineCounts = countBy(afterBrand, 'plineDetail');
-  const pline1Counts = countBy(afterPLine, 'pline1');
-  const focusCounts = countBy(afterPLine1, 'focusGroup');
-  
-  // Location counts from all items (not cascaded)
-  const locCounts = {};
-  for (const i of base) {
-    for (const l of i.locations) {
-      if (l.loc) locCounts[l.loc] = (locCounts[l.loc] || 0) + 1;
-    }
-  }
-  
-  function fillSelect(id, counts, placeholder, labelFn) {
+  // Rebuild a select dropdown using DOM API (not innerHTML) for reliable selection
+  function rebuildSelect(id, counts, placeholder, labelFn) {
     const el = document.getElementById(id);
     if (!el) return;
-    const current = el.value;
-    const entries = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+    const prev = el.value;
     
-    const total = entries.length;
-    let html = `<option value="">${placeholder} (${total})</option>`;
-    for (const [val, count] of entries) {
-      const label = labelFn ? labelFn(val) : val;
+    // Clear all options
+    while (el.firstChild) el.removeChild(el.firstChild);
+    
+    // Default option
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = placeholder + ' (' + Object.keys(counts).length + ')';
+    el.appendChild(def);
+    
+    // Add sorted options
+    const sorted = Object.keys(counts).sort();
+    for (const v of sorted) {
       const opt = document.createElement('option');
-      opt.value = val;
-      opt.textContent = `${label} (${count})`;
-      if (val === current) opt.selected = true;
-      html += opt.outerHTML;
+      opt.value = v;
+      opt.textContent = (labelFn ? labelFn(v) : v) + ' (' + counts[v] + ')';
+      el.appendChild(opt);
     }
-    el.innerHTML = html;
-    // Reset if current value no longer exists
-    if (current && !(current in counts)) el.value = '';
+    
+    // Restore previous selection if still valid
+    if (prev && (prev in counts)) {
+      el.value = prev;
+    } else {
+      el.value = '';
+    }
   }
   
-  fillSelect('filterBrand', brandCounts, '🏷 All Brands', (c) => bm[c] || c);
-  fillSelect('filterPLine', plineCounts, '📦 Product Line');
-  fillSelect('filterPLine1', pline1Counts, '🔧 Sub-category');
-  fillSelect('filterFocus', focusCounts, '⭐ Focus Group');
-  fillSelect('filterLocation', locCounts, '📍 All Locations');
+  // Location counts (not cascaded)
+  const locCounts = {};
+  for (const i of base) { for (const l of i.locations) { if (l.loc) locCounts[l.loc] = (locCounts[l.loc] || 0) + 1; } }
+  
+  // Determine which dropdowns to rebuild:
+  // - Only rebuild DOWNSTREAM of what changed
+  // - Never rebuild the dropdown the user just interacted with
+  const rebuild = {
+    brand: !changedFilter || changedFilter === 'init' || changedFilter === 'stock',
+    pline: !changedFilter || changedFilter === 'init' || changedFilter === 'brand' || changedFilter === 'stock',
+    pline1: !changedFilter || changedFilter === 'init' || changedFilter === 'brand' || changedFilter === 'pline' || changedFilter === 'stock',
+    focus: true, // Always rebuild focus (it's the last in cascade)
+    loc: !changedFilter || changedFilter === 'init' || changedFilter === 'stock',
+  };
+  
+  if (rebuild.brand) rebuildSelect('filterBrand', countBy(base, 'brand'), '🏷 All Brands', c => bm[c] || c);
+  if (rebuild.pline) rebuildSelect('filterPLine', countBy(afterBrand, 'plineDetail'), '📦 Product Line');
+  if (rebuild.pline1) rebuildSelect('filterPLine1', countBy(afterPLine, 'pline1'), '🔧 Sub-category');
+  if (rebuild.focus) rebuildSelect('filterFocus', countBy(afterPLine1, 'focusGroup'), '⭐ Focus Group');
+  if (rebuild.loc) rebuildSelect('filterLocation', locCounts, '📍 All Locations');
 }
+
 
 function handleSearch(val) {
   state.searchQuery = val.trim();
