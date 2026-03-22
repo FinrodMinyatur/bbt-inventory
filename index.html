@@ -675,13 +675,24 @@ async function refreshData() {
     
     if (!state._productCache) {
       try {
-        const baseUrl = window.location.href.replace(/\/[^\/]*$/, '/');
-        const prodResp = await fetch(baseUrl + 'products.json');
+        // Build correct base URL regardless of hash/query params
+        const loc = window.location;
+        let basePath = loc.pathname;
+        // Remove filename if present (e.g. /index.html)
+        if (basePath.includes('.')) basePath = basePath.replace(/\/[^\/]*$/, '/');
+        // Ensure trailing slash
+        if (!basePath.endsWith('/')) basePath += '/';
+        const prodUrl = loc.origin + basePath + 'products.json';
+        console.log('📦 Loading product catalog from:', prodUrl);
+        
+        const prodResp = await fetch(prodUrl, { cache: 'default' });
         if (prodResp.ok) {
           state._productCache = await prodResp.json();
           console.log('✅ Product catalog loaded:', Object.keys(state._productCache.p || {}).length, 'items');
+        } else {
+          console.warn('❌ products.json response:', prodResp.status, prodResp.statusText);
         }
-      } catch(e) { console.warn('Product catalog not found:', e.message); }
+      } catch(e) { console.warn('Product catalog error:', e.message); }
     }
     const prodMap = state._productCache?.p || {};
     const focusRules = state._productCache?.f || [];
@@ -812,7 +823,9 @@ async function refreshData() {
     renderLocChips();
     renderItems();
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    showToast(`✅ ${state.items.length} items loaded in ${elapsed}s`, 'success');
+    const prodCount = Object.keys(state._productCache?.p || {}).length;
+    const prodStatus = prodCount > 0 ? ` | ${prodCount} products` : ' | ⚠️ No product catalog';
+    showToast(`✅ ${state.items.length} items in ${elapsed}s${prodStatus}`, 'success');
     
     // AUTO-APPEND DEBUG at bottom of item list
     appendDebugPanel();
