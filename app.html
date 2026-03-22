@@ -788,59 +788,28 @@ async function refreshData() {
       return { fg: '', mfg: '' };
     }
     
-    // ──── STEP 4b: Fetch Location breakdown (matrix page) ────
+    // ──── STEP 4b: Fetch Location from Bin Contents (flat table) ────
     let locData = [];
     try {
-      locData = await fetchAllPages('Items_by_Location', '', '📍 Locations');
-    } catch(e) { console.warn('Location fetch failed:', e.message); }
+      locData = await fetchAllPages('Bin_Contents_List_Excel', 
+        '$select=Location_Code,Item_No,Quantity_Base', '📍 Locations');
+    } catch(e) { console.warn('Bin Contents fetch failed:', e.message); }
     state._rawLocs = locData;
     
-    // Parse Items_by_Location matrix page
-    // Column names ARE the location codes (AP, AL, BK, SJ, etc.)
-    // Values are qty at that location (number or 0)
+    // Parse Bin Contents: flat table with Location_Code, Item_No, Quantity_Base
     const locMap = {};
     const locSet = new Set();
-    if (locData.length > 0) {
-      const allKeys = Object.keys(locData[0]);
-      
-      // System/meta fields to skip — everything else is a location column
-      const skipKeys = new Set([
-        '@odata.etag','@odata.id','@odata.editLink',
-        'No','No_','Code','Item_No','Item_No_',
-        'Description','Name','Item_Description',
-        'SystemId','SystemCreatedAt','SystemCreatedBy',
-        'SystemModifiedAt','SystemModifiedBy',
-        'Variant_Code','Base_Unit_of_Measure','Unit_of_Measure'
-      ]);
-      
-      // All remaining columns are location codes
-      const locCols = allKeys.filter(k => !skipKeys.has(k) && !k.startsWith('@') && !k.startsWith('System'));
-      
-      console.log('📍 All columns (' + allKeys.length + '):', allKeys);
-      console.log('📍 Location columns (' + locCols.length + '):', locCols);
-      
-      // Sample first row to debug
-      if (locCols.length > 0) {
-        const s = locData[0];
-        console.log('📍 Sample row values:', locCols.map(c => c + '=' + s[c] + '(' + typeof s[c] + ')'));
-      }
-      
-      for (const row of locData) {
-        const itemNo = row.No || row.Code || row.No_ || row.Item_No || '';
-        if (!itemNo) continue;
-        for (const col of locCols) {
-          const raw = row[col];
-          const qty = parseFloat(raw) || 0;
-          if (qty === 0) continue;
-          if (!locMap[itemNo]) locMap[itemNo] = [];
-          locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
-          locSet.add(col);
-        }
-      }
-      
-      console.log('📍 Locations with stock:', Array.from(locSet));
-      console.log('📍 Items with location data:', Object.keys(locMap).length);
+    for (const row of locData) {
+      const itemNo = row.Item_No || '';
+      const loc = row.Location_Code || '';
+      const qty = parseFloat(row.Quantity_Base) || 0;
+      if (!itemNo || !loc || qty === 0) continue;
+      if (!locMap[itemNo]) locMap[itemNo] = [];
+      locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
+      locSet.add(loc);
     }
+    console.log('📍 Locations found:', Array.from(locSet));
+    console.log('📍 Items with location data:', Object.keys(locMap).length);
     
     // ──── STEP 5: Merge BC365 inventory + product catalog ────
     updateLoadingProgress('🔄 Merging data', items.length, 0, ((Date.now()-t0)/1000).toFixed(1));
@@ -1196,7 +1165,18 @@ function getFilteredItems() {
 
 // ──── Cascading filter logic ────
 function cascadeFilters(changedFilter) {
-  // When a filter changes, re-populate downstream filters based on current selection
+  // Reset downstream filters when upstream changes
+  if (changedFilter === 'brand') {
+    document.getElementById('filterPLine').value = '';
+    document.getElementById('filterPLine1').value = '';
+    document.getElementById('filterFocus').value = '';
+  } else if (changedFilter === 'pline') {
+    document.getElementById('filterPLine1').value = '';
+    document.getElementById('filterFocus').value = '';
+  } else if (changedFilter === 'pline1') {
+    document.getElementById('filterFocus').value = '';
+  }
+  // Re-populate with cascaded options
   populateFilterDropdowns(changedFilter);
   renderItems();
   updateStatusBar();
@@ -1295,12 +1275,17 @@ function populateFilterDropdowns(changedFilter) {
     if (!el) return;
     const current = el.value;
     const sorted = Array.from(values).sort();
-    // Count items per value
-    el.innerHTML = `<option value="">${placeholder} (${sorted.length})</option>` + 
-      sorted.map(v => {
-        const label = labelFn ? labelFn(v) : v;
-        return `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${label}</option>`;
-      }).join('');
+    let html = `<option value="">${placeholder} (${sorted.length})</option>`;
+    for (const v of sorted) {
+      const label = labelFn ? labelFn(v) : v;
+      // Use textContent for option to avoid HTML encoding issues
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = label;
+      if (v === current) opt.selected = true;
+      html += opt.outerHTML;
+    }
+    el.innerHTML = html;
     // If current selection no longer valid, reset
     if (current && !values.has(current)) el.value = '';
   };
