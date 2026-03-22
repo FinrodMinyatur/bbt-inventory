@@ -795,59 +795,51 @@ async function refreshData() {
     } catch(e) { console.warn('Location fetch failed:', e.message); }
     state._rawLocs = locData;
     
-    // Parse matrix: columns that are numeric or parseable = location codes
+    // Parse Items_by_Location matrix page
+    // Column names ARE the location codes (AP, AL, BK, SJ, etc.)
+    // Values are qty at that location (number or 0)
     const locMap = {};
     const locSet = new Set();
     if (locData.length > 0) {
-      const sampleRow = locData[0];
-      const allKeys = Object.keys(sampleRow);
-      const skipKeys = new Set(['@odata.etag','No','No_','Code','SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy','Item_No','Description','Name']);
+      const allKeys = Object.keys(locData[0]);
       
-      // Detect location columns: numeric value OR string that parses to number, AND not a skip key
-      const locCols = allKeys.filter(k => {
-        if (skipKeys.has(k)) return false;
-        const v = sampleRow[k];
-        if (typeof v === 'number') return true;
-        if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) return true;
-        return false;
-      });
+      // System/meta fields to skip — everything else is a location column
+      const skipKeys = new Set([
+        '@odata.etag','@odata.id','@odata.editLink',
+        'No','No_','Code','Item_No','Item_No_',
+        'Description','Name','Item_Description',
+        'SystemId','SystemCreatedAt','SystemCreatedBy',
+        'SystemModifiedAt','SystemModifiedBy',
+        'Variant_Code','Base_Unit_of_Measure','Unit_of_Measure'
+      ]);
       
-      // Debug: log what we found
-      console.log('📍 All columns:', allKeys.length, allKeys.slice(0, 20));
-      console.log('📍 Sample types:', allKeys.slice(0, 10).map(k => k + ':' + typeof sampleRow[k]));
-      console.log('📍 Location columns detected:', locCols);
+      // All remaining columns are location codes
+      const locCols = allKeys.filter(k => !skipKeys.has(k) && !k.startsWith('@') && !k.startsWith('System'));
       
-      if (locCols.length === 0) {
-        // Fallback: maybe ALL non-skip non-string columns are locations
-        // Or maybe the page returns Location_Code as a field (flat format)
-        const hasLocField = allKeys.includes('Location_Code');
-        console.log('📍 Has Location_Code field:', hasLocField);
-        if (hasLocField) {
-          // Flat format with Location_Code
-          for (const row of locData) {
-            const itemNo = row.No || row.Code || row.No_ || row.Item_No || '';
-            const loc = row.Location_Code || '';
-            const qty = parseFloat(row.Quantity || row.Inventory || row.Qty || 0) || 0;
-            if (!itemNo || !loc || qty === 0) continue;
-            if (!locMap[itemNo]) locMap[itemNo] = [];
-            locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
-            locSet.add(loc);
-          }
-        }
-      } else {
-        for (const row of locData) {
-          const itemNo = row.No || row.Code || row.No_ || '';
-          if (!itemNo) continue;
-          for (const col of locCols) {
-            const qty = parseFloat(row[col]) || 0;
-            if (qty === 0) continue;
-            if (!locMap[itemNo]) locMap[itemNo] = [];
-            locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
-            locSet.add(col);
-          }
+      console.log('📍 All columns (' + allKeys.length + '):', allKeys);
+      console.log('📍 Location columns (' + locCols.length + '):', locCols);
+      
+      // Sample first row to debug
+      if (locCols.length > 0) {
+        const s = locData[0];
+        console.log('📍 Sample row values:', locCols.map(c => c + '=' + s[c] + '(' + typeof s[c] + ')'));
+      }
+      
+      for (const row of locData) {
+        const itemNo = row.No || row.Code || row.No_ || row.Item_No || '';
+        if (!itemNo) continue;
+        for (const col of locCols) {
+          const raw = row[col];
+          const qty = parseFloat(raw) || 0;
+          if (qty === 0) continue;
+          if (!locMap[itemNo]) locMap[itemNo] = [];
+          locMap[itemNo].push({ loc: col, qty, reserved: 0, available: qty });
+          locSet.add(col);
         }
       }
-      console.log('📍 Locations found:', Array.from(locSet));
+      
+      console.log('📍 Locations with stock:', Array.from(locSet));
+      console.log('📍 Items with location data:', Object.keys(locMap).length);
     }
     
     // ──── STEP 5: Merge BC365 inventory + product catalog ────
@@ -1076,6 +1068,12 @@ function renderItems() {
         ${item.classDetail ? `<div class="item-meta-tag"><span class="label">Class:</span> ${esc(item.classDetail)}</div>` : ''}
         <div class="item-meta-tag"><span class="label">UoM:</span> ${esc(item.uom)}</div>
       </div>
+      ${item.locations.length > 0 ? `
+      <div style="margin-top:6px;font-size:11px;font-family:'JetBrains Mono',monospace;">
+        <span style="color:var(--text3);">📍</span> ${item.locations.map(l => 
+          `<span style="color:var(--text2);">${esc(l.loc)}</span><span style="color:${l.qty > 0 ? 'var(--green)' : 'var(--text3)'};">=${fmtNum(l.qty)}</span>`
+        ).join('<span style="color:var(--text3);"> · </span>')}
+      </div>` : ''}
       
       <div class="item-detail">
         ${item.mainDetail || item.marketDetail || item.pline1 ? `
