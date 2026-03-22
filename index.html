@@ -581,10 +581,19 @@ async function fetchAllPages(endpoint, params, label) {
   let allValues = [];
   let url = buildUrl(endpoint, params);
   let page = 0;
+  const t0 = Date.now();
+  
+  // Force a repaint before starting
+  updateLoadingProgress(label || endpoint, 0, 0, 0);
+  await new Promise(r => setTimeout(r, 50));
   
   while (url) {
     page++;
-    updateLoadingProgress(label || endpoint, allValues.length, page);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    updateLoadingProgress(label || endpoint, allValues.length, page, elapsed);
+    
+    // Force DOM repaint so user sees the counter update
+    await new Promise(r => setTimeout(r, 0));
     
     const resp = await fetch(url, {
       headers: {
@@ -596,7 +605,6 @@ async function fetchAllPages(endpoint, params, label) {
     
     if (!resp.ok) {
       if (resp.status === 401) { signOut(); return []; }
-      // Try to get error details from response body
       let detail = '';
       try {
         const errBody = await resp.json();
@@ -608,7 +616,10 @@ async function fetchAllPages(endpoint, params, label) {
     const data = await resp.json();
     const newRows = data.value || [];
     allValues = allValues.concat(newRows);
-    updateLoadingProgress(label || endpoint, allValues.length, page);
+    
+    const elapsed2 = ((Date.now() - t0) / 1000).toFixed(1);
+    updateLoadingProgress(label || endpoint, allValues.length, page, elapsed2);
+    
     url = data['@odata.nextLink'] || null;
   }
   
@@ -627,7 +638,7 @@ async function refreshData() {
   updateStatusDot('loading');
   
   try {
-    // Helper: get field value trying multiple possible names
+    // Helper: find field value by trying multiple possible names
     const f = (row, ...names) => {
       for (const n of names) {
         if (row[n] !== undefined && row[n] !== null) return row[n];
@@ -635,77 +646,123 @@ async function refreshData() {
       return null;
     };
     
-    // 1) Fetch Items — try multiple endpoints with fallback
+    // ──── STEP 1: Fetch Item data (Page 30 has ALL item card fields) ────
     let items = [];
-    const itemEndpoints = ['ItemsListPBI', 'Item_Card_Excel', 'workflowItems'];
+    let usedEndpoint = '';
+    const itemEndpoints = ['Item_Card_Excel', 'ItemsListPBI', 'workflowItems'];
     for (const ep of itemEndpoints) {
       try {
-        items = await fetchAllPages(ep, '', '📦 Items');
-        if (items.length > 0) {
-          console.log(`✅ Items loaded from ${ep}:`, items.length, 'rows');
-          console.log('Item field names:', Object.keys(items[0]));
-          break;
-        }
-      } catch (e) {
-        console.warn(`❌ ${ep} failed:`, e.message);
-      }
+        items = await fetchAllPages(ep, '', '📦 Items (' + ep + ')');
+        if (items.length > 0) { usedEndpoint = ep; break; }
+      } catch (e) { console.warn('❌ ' + ep + ':', e.message); }
     }
     
-    // 2) Fetch Items by Location — try multiple endpoints
+    // ──── STEP 2: Fetch Location breakdown ────
     let locData = [];
-    const locEndpoints = ['Items_by_Location', 'Bin_Contents_List_Excel', 'Bin_Contents_Excel'];
+    let locEndpointUsed = '';
+    const locEndpoints = ['Items_by_Location', 'Bin_Contents_List_Excel'];
     for (const ep of locEndpoints) {
       try {
-        locData = await fetchAllPages(ep, '', '📍 Locations');
-        if (locData.length > 0) {
-          console.log(`✅ Locations loaded from ${ep}:`, locData.length, 'rows');
-          console.log('Location field names:', Object.keys(locData[0]));
-          break;
-        }
-      } catch (e) {
-        console.warn(`❌ ${ep} failed:`, e.message);
-      }
+        locData = await fetchAllPages(ep, '', '📍 Locations (' + ep + ')');
+        if (locData.length > 0) { locEndpointUsed = ep; break; }
+      } catch (e) { console.warn('❌ ' + ep + ':', e.message); }
     }
     
-    // Update progress: processing
-    updateLoadingProgress('🔄 Processing', items.length + locData.length, 0);
+    updateLoadingProgress('🔄 Processing', items.length + locData.length, 0, ((Date.now() - t0) / 1000).toFixed(1));
     
-    // Store raw data for debug
+    // Store raw for debug
     state._rawItems = items;
     state._rawLocs = locData;
+    state._usedEndpoint = usedEndpoint;
+    state._locEndpoint = locEndpointUsed;
     
-    // Build location map with flexible field names
+    // ──── STEP 3: Auto-detect field names from first row ────
+    let fieldMap = {};
+    if (items.length > 0) {
+      const k = Object.keys(items[0]);
+      const find = (candidates) => candidates.find(c => k.includes(c)) || null;
+      
+      fieldMap = {
+        no: find(['No', 'No_', 'Item_No']),
+        desc: find(['Description', 'Item_Description', 'Name', 'Search_Description']),
+        category: find(['Item_Category_Code', 'Item_Category', 'Gen_Prod_Posting_Group']),
+        uom: find(['Base_Unit_of_Measure', 'Unit_of_Measure', 'Sales_Unit_of_Measure']),
+        inventory: find(['Inventory', 'Qty_on_Hand', 'Net_Change', 'Quantity']),
+        soQty: find(['Qty_on_Sales_Order', 'Qty_on_Sales_Orders']),
+        poQty: find(['Qty_on_Purch_Order', 'Qty_on_Purch_Orders']),
+        reserved: find(['Reserved_Qty_on_Inventory', 'Reserved_Qty', 'Qty_on_Component_Lines']),
+      };
+      console.log('📋 Field mapping:', JSON.stringify(fieldMap));
+      console.log('📋 All fields:', k.join(', '));
+      state._fieldMap = fieldMap;
+    }
+    
+    // ──── STEP 4: Build location map ────
     const locMap = {};
     const locSet = new Set();
     
-    for (const row of locData) {
-      const itemNo = f(row, 'Code', 'No', 'Item_No', 'ItemNo', 'Item_No_', 'No_') || '';
-      const loc = f(row, 'Location_Code', 'LocationCode', 'Location', 'Location_Filter') || '';
-      const qty = parseFloat(f(row, 'Inventory_Qty', 'Inventory', 'Qty', 'Quantity', 'Qty_Base') || 0);
-      const reserved = parseFloat(f(row, 'Reserved_Qty_on_Inventory', 'Reserved_Qty', 'Reserved_Quantity') || 0);
+    if (locData.length > 0) {
+      const sampleRow = locData[0];
+      const allKeys = Object.keys(sampleRow);
+      const skipFields = new Set(['@odata.etag','No','No_','Code','Item_No','Name','Description',
+        'SystemId','SystemCreatedAt','SystemCreatedBy','SystemModifiedAt','SystemModifiedBy',
+        'Variant_Code','Item_No_','Zone_Code','Bin_Code','Bin_Type_Code',
+        'Location_Code','Location_Filter','Qty_per_Unit_of_Measure',
+        'Unit_of_Measure_Code','Bin_Ranking','Fixed','Default','Dedicated',
+        'Warehouse_Class_Code','Block_Movement','Min_Qty','Max_Qty',
+        'Item_Description','Quantity','Pick_Qty','Put_away_Qty','Base_Unit_of_Measure',
+        'ATO_Components_Pick_Qty','Neg_Adjmt_Qty','Pos_Adjmt_Qty']);
       
-      if (!itemNo || qty === 0) continue;
+      // Detect: is this a MATRIX page (locations as columns) or FLAT (Location_Code field)?
+      const hasLocationCodeField = allKeys.includes('Location_Code') || allKeys.includes('LocationCode');
+      const numericCols = allKeys.filter(k => !skipFields.has(k) && typeof sampleRow[k] === 'number');
       
-      if (!locMap[itemNo]) locMap[itemNo] = [];
-      locMap[itemNo].push({ loc, qty, reserved, available: qty - reserved });
-      if (loc) locSet.add(loc);
+      if (!hasLocationCodeField && numericCols.length > 1) {
+        // MATRIX: location codes ARE the column names
+        for (const row of locData) {
+          const itemNo = f(row, 'No', 'Code', 'No_', 'Item_No') || '';
+          if (!itemNo) continue;
+          for (const locCol of numericCols) {
+            const qty = parseFloat(row[locCol]) || 0;
+            if (qty === 0) continue;
+            if (!locMap[itemNo]) locMap[itemNo] = [];
+            locMap[itemNo].push({ loc: locCol, qty, reserved: 0, available: qty });
+            locSet.add(locCol);
+          }
+        }
+      } else {
+        // FLAT: each row has a Location_Code field
+        for (const row of locData) {
+          const itemNo = f(row, 'Item_No', 'Item_No_', 'No', 'Code', 'No_') || '';
+          const loc = f(row, 'Location_Code', 'LocationCode', 'Location') || '';
+          const qty = parseFloat(f(row, 'Quantity', 'Inventory', 'Qty', 'Qty_Base') || 0);
+          const reserved = parseFloat(f(row, 'Reserved_Qty_on_Inventory', 'Reserved_Qty', 'Pick_Qty') || 0);
+          if (!itemNo || qty === 0) continue;
+          if (!locMap[itemNo]) locMap[itemNo] = [];
+          locMap[itemNo].push({ loc: loc || 'MAIN', qty, reserved, available: qty - reserved });
+          if (loc) locSet.add(loc);
+        }
+      }
     }
     
-    // Merge into items with flexible field names
+    // ──── STEP 5: Build final items array ────
     state.items = items.map(item => {
-      const no = f(item, 'No', 'No_', 'Item_No', 'ItemNo') || '';
-      const inventory = parseFloat(f(item, 'Inventory', 'Qty_on_Hand', 'Quantity') || 0);
-      const soQty = parseFloat(f(item, 'Qty_on_Sales_Order', 'Qty_on_Sales_Orders', 'Sales_Qty') || 0);
-      const poQty = parseFloat(f(item, 'Qty_on_Purch_Order', 'Qty_on_Purch_Orders', 'Purchase_Qty') || 0);
+      const no = (fieldMap.no ? item[fieldMap.no] : f(item, 'No', 'No_')) || '';
+      const inventory = parseFloat((fieldMap.inventory ? item[fieldMap.inventory] : 0) || 0);
+      const soQty = parseFloat((fieldMap.soQty ? item[fieldMap.soQty] : 0) || 0);
+      const poQty = parseFloat((fieldMap.poQty ? item[fieldMap.poQty] : 0) || 0);
+      const itemReserved = parseFloat((fieldMap.reserved ? item[fieldMap.reserved] : 0) || 0);
+      
       const locs = locMap[no] || [];
-      const totalReserved = locs.reduce((s, l) => s + l.reserved, 0);
+      const locReserved = locs.reduce((s, l) => s + l.reserved, 0);
+      const totalReserved = itemReserved || locReserved;
       const available = inventory - totalReserved;
       
       return {
         no,
-        desc: f(item, 'Description', 'Item_Description', 'Name') || '',
-        category: f(item, 'Item_Category_Code', 'Category', 'Item_Category') || '',
-        uom: f(item, 'Base_Unit_of_Measure', 'Unit_of_Measure', 'UoM') || '',
+        desc: (fieldMap.desc ? item[fieldMap.desc] : '') || '',
+        category: (fieldMap.category ? item[fieldMap.category] : '') || '',
+        uom: (fieldMap.uom ? item[fieldMap.uom] : '') || '',
         inventory,
         reserved: totalReserved,
         available,
@@ -939,13 +996,13 @@ function showLoading() {
   `;
 }
 
-function updateLoadingProgress(label, count, page) {
+function updateLoadingProgress(label, count, page, elapsed) {
   const stepEl = document.getElementById('loadStep');
   const progEl = document.getElementById('loadProgress');
   const detailEl = document.getElementById('loadDetail');
   if (stepEl) stepEl.textContent = `Fetching ${label}...`;
-  if (progEl) progEl.textContent = count.toLocaleString() + ' rows';
-  if (detailEl) detailEl.textContent = `Page ${page} · ${label}`;
+  if (progEl) progEl.textContent = count > 0 ? count.toLocaleString() + ' rows' : '—';
+  if (detailEl) detailEl.textContent = (page > 0 ? `Page ${page}` : '') + (elapsed ? ` · ${elapsed}s` : '') + ` · ${label}`;
 }
 
 // ═══════════════════════════════════════════
@@ -1212,8 +1269,12 @@ function showRawDebug() {
   html += `</div>`;
   
   // Processed items debug
-  html += `<div style="background:var(--surface2);border:1px solid var(--green);border-radius:12px;padding:14px;">`;
+  html += `<div style="background:var(--surface2);border:1px solid var(--green);border-radius:12px;padding:14px;margin-bottom:12px;">`;
   html += `<div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:8px;">✅ PROCESSED — ${state.items.length} items after filter</div>`;
+  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:6px;">Endpoint: ${state._usedEndpoint || '?'} | Loc: ${state._locEndpoint || '?'}</div>`;
+  if (state._fieldMap) {
+    html += `<pre style="font-size:9px;color:var(--orange);font-family:'JetBrains Mono',monospace;line-height:1.6;margin-bottom:6px;">FIELD MAP:\n${Object.entries(state._fieldMap).map(([k,v]) => k + ' → ' + (v || '❌ NOT FOUND')).join('\n')}</pre>`;
+  }
   if (state.items.length > 0) {
     const s = state.items[0];
     html += `<pre style="font-size:10px;color:var(--text2);font-family:'JetBrains Mono',monospace;line-height:1.6;">no = "${s.no}"\ndesc = "${s.desc}"\ncategory = "${s.category}"\nuom = "${s.uom}"\ninventory = ${s.inventory}\nreserved = ${s.reserved}\navailable = ${s.available}\nsoQty = ${s.soQty}\npoQty = ${s.poQty}\nlocations = ${s.locations.length}</pre>`;
