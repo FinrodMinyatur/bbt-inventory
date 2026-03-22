@@ -2,12 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="BBT Stock">
 <meta name="theme-color" content="#0a0e1a">
-<title>BBT Inventory v3.0</title>
+<title>BBT Inventory v4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,300&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -844,6 +847,7 @@ async function refreshData() {
         desc2: (pd && pd[1]) || (fm.desc2 ? item[fm.desc2] : '') || '',
         category: (fm.category ? item[fm.category] : '') || '',
         uom: (fm.uom ? item[fm.uom] : '') || '',
+        brandCode: (pd && pd[7]) || '',
         brand: (pd && pd[7]) ? ((state._brandMap && state._brandMap[pd[7]]) || pd[7]) : '',
         mainDetail: (pd && pd[2]) || '',
         plineDetail: (pd && pd[5]) || '',
@@ -1234,68 +1238,70 @@ function updateFilterStatus() {
 
 function populateFilterDropdowns(changedFilter) {
   const bm = state._brandMap || {};
-  let items = state.items;
+  let base = state.items;
   
-  // For cascading: apply upstream filters to narrow downstream options
+  // Apply in-stock filter to base
+  if (state.inStockOnly) base = base.filter(i => i.available > 0);
+  
+  // Read current filter values
   const fBrand = document.getElementById('filterBrand')?.value || '';
   const fPLine = document.getElementById('filterPLine')?.value || '';
   const fPLine1 = document.getElementById('filterPLine1')?.value || '';
-  const fFocus = document.getElementById('filterFocus')?.value || '';
   
-  // In-stock filter applies to all
-  if (state.inStockOnly) items = items.filter(i => i.available > 0);
+  // Cascade: each level filters from the one above
+  const afterBrand = fBrand ? base.filter(i => i.brand === fBrand) : base;
+  const afterPLine = fPLine ? afterBrand.filter(i => i.plineDetail === fPLine) : afterBrand;
+  const afterPLine1 = fPLine1 ? afterPLine.filter(i => i.pline1 === fPLine1) : afterPLine;
   
-  // Brand: show all brands (no upstream filter)
-  const brandItems = items;
+  // Count per value for each level
+  function countBy(arr, field) {
+    const map = {};
+    for (const i of arr) {
+      const v = i[field];
+      if (v) map[v] = (map[v] || 0) + 1;
+    }
+    return map;
+  }
   
-  // PLine: filtered by brand
-  const plineItems = fBrand ? items.filter(i => i.brand === fBrand) : items;
+  const brandCounts = countBy(base, 'brand');
+  const plineCounts = countBy(afterBrand, 'plineDetail');
+  const pline1Counts = countBy(afterPLine, 'pline1');
+  const focusCounts = countBy(afterPLine1, 'focusGroup');
   
-  // PLine1: filtered by brand + pline
-  let pline1Items = plineItems;
-  if (fPLine) pline1Items = pline1Items.filter(i => i.plineDetail === fPLine);
+  // Location counts from all items (not cascaded)
+  const locCounts = {};
+  for (const i of base) {
+    for (const l of i.locations) {
+      if (l.loc) locCounts[l.loc] = (locCounts[l.loc] || 0) + 1;
+    }
+  }
   
-  // Focus: filtered by brand + pline + pline1
-  let focusItems = pline1Items;
-  if (fPLine1) focusItems = focusItems.filter(i => i.pline1 === fPLine1);
-  
-  // Location: show all locations
-  const locItems = items;
-  
-  // Collect unique values
-  const brands = new Set(), plines = new Set(), pline1s = new Set(), focuses = new Set(), locs = new Set();
-  
-  for (const i of brandItems) { if (i.brand) brands.add(i.brand); }
-  for (const i of plineItems) { if (i.plineDetail) plines.add(i.plineDetail); }
-  for (const i of pline1Items) { if (i.pline1) pline1s.add(i.pline1); }
-  for (const i of focusItems) { if (i.focusGroup) focuses.add(i.focusGroup); }
-  for (const i of locItems) { for (const l of i.locations) { if (l.loc) locs.add(l.loc); } }
-  
-  const fillSelect = (id, values, placeholder, labelFn) => {
+  function fillSelect(id, counts, placeholder, labelFn) {
     const el = document.getElementById(id);
     if (!el) return;
     const current = el.value;
-    const sorted = Array.from(values).sort();
-    let html = `<option value="">${placeholder} (${sorted.length})</option>`;
-    for (const v of sorted) {
-      const label = labelFn ? labelFn(v) : v;
-      // Use textContent for option to avoid HTML encoding issues
+    const entries = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+    
+    const total = entries.length;
+    let html = `<option value="">${placeholder} (${total})</option>`;
+    for (const [val, count] of entries) {
+      const label = labelFn ? labelFn(val) : val;
       const opt = document.createElement('option');
-      opt.value = v;
-      opt.textContent = label;
-      if (v === current) opt.selected = true;
+      opt.value = val;
+      opt.textContent = `${label} (${count})`;
+      if (val === current) opt.selected = true;
       html += opt.outerHTML;
     }
     el.innerHTML = html;
-    // If current selection no longer valid, reset
-    if (current && !values.has(current)) el.value = '';
-  };
+    // Reset if current value no longer exists
+    if (current && !(current in counts)) el.value = '';
+  }
   
-  fillSelect('filterBrand', brands, '🏷 All Brands', (c) => bm[c] ? `${bm[c]}` : c);
-  fillSelect('filterPLine', plines, '📦 Product Line');
-  fillSelect('filterPLine1', pline1s, '🔧 Sub-category');
-  fillSelect('filterFocus', focuses, '⭐ Focus Group');
-  fillSelect('filterLocation', locs, '📍 All Locations');
+  fillSelect('filterBrand', brandCounts, '🏷 All Brands', (c) => bm[c] || c);
+  fillSelect('filterPLine', plineCounts, '📦 Product Line');
+  fillSelect('filterPLine1', pline1Counts, '🔧 Sub-category');
+  fillSelect('filterFocus', focusCounts, '⭐ Focus Group');
+  fillSelect('filterLocation', locCounts, '📍 All Locations');
 }
 
 function handleSearch(val) {
