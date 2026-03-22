@@ -807,6 +807,9 @@ async function refreshData() {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     showToast(`✅ ${state.items.length} items loaded in ${elapsed}s`, 'success');
     
+    // AUTO-APPEND DEBUG at bottom of item list
+    appendDebugPanel();
+    
   } catch (err) {
     console.error('Refresh error:', err);
     updateStatusDot('offline');
@@ -1285,6 +1288,66 @@ function showRawDebug() {
   html += `</div>`;
   
   el.innerHTML = html;
+}
+
+function appendDebugPanel() {
+  const el = document.getElementById('itemList');
+  if (!el) return;
+  
+  const rawItems = state._rawItems || [];
+  const rawLocs = state._rawLocs || [];
+  
+  let html = `<div style="padding:12px 16px 24px;">`;
+  html += `<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:10px;">`;
+  html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px;">🔧 DEBUG — Field Mapping</div>`;
+  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:8px;">Endpoint: ${state._usedEndpoint || '?'} | Loc: ${state._locEndpoint || '?'}</div>`;
+  
+  if (state._fieldMap) {
+    html += `<pre style="font-size:10px;color:var(--text);font-family:'JetBrains Mono',monospace;line-height:2;white-space:pre-wrap;">`;
+    for (const [key, val] of Object.entries(state._fieldMap)) {
+      const icon = val ? '✅' : '❌';
+      html += `${icon} ${key} → ${val || 'NOT FOUND'}\n`;
+    }
+    html += `</pre>`;
+  }
+  html += `</div>`;
+  
+  if (rawItems.length > 0) {
+    html += `<div style="background:var(--surface2);border:1px solid var(--orange);border-radius:12px;padding:14px;margin-bottom:10px;">`;
+    html += `<div style="font-size:13px;font-weight:700;color:var(--orange);margin-bottom:6px;">📦 Sample Item (1 of ${rawItems.length})</div>`;
+    const sample = rawItems[0];
+    const keys = Object.keys(sample).filter(k => k !== '@odata.etag');
+    html += `<pre style="font-size:9px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',monospace;line-height:1.8;max-height:500px;overflow:auto;">`;
+    for (const k of keys) {
+      const v = sample[k];
+      const isNum = typeof v === 'number';
+      const vStr = (v === null || v === undefined) ? 'null' : isNum ? v : '"' + String(v).substring(0,50) + '"';
+      const clr = isNum && v !== 0 ? 'color:var(--green)' : isNum ? 'color:var(--text3)' : '';
+      html += `<span style="color:var(--orange)">${k}</span> = <span style="${clr}">${vStr}</span>\n`;
+    }
+    html += `</pre></div>`;
+  }
+  
+  if (rawLocs.length > 0) {
+    html += `<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:10px;">`;
+    html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px;">📍 Sample Location (1 of ${rawLocs.length})</div>`;
+    const sample = rawLocs[0];
+    const keys = Object.keys(sample).filter(k => k !== '@odata.etag');
+    html += `<pre style="font-size:9px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',monospace;line-height:1.8;max-height:300px;overflow:auto;">`;
+    for (const k of keys) {
+      const v = sample[k];
+      const isNum = typeof v === 'number';
+      const vStr = (v === null || v === undefined) ? 'null' : isNum ? v : '"' + String(v).substring(0,50) + '"';
+      const clr = isNum && v !== 0 ? 'color:var(--green)' : isNum ? 'color:var(--text3)' : '';
+      html += `<span style="color:var(--orange)">${k}</span> = <span style="${clr}">${vStr}</span>\n`;
+    }
+    html += `</pre></div>`;
+  }
+  
+  html += `<div style="text-align:center;font-size:11px;color:var(--text3);">📸 Scroll down, screenshot this debug info and send to Claude</div>`;
+  html += `</div>`;
+  
+  el.innerHTML += html;
 }
 </script>
 </body>
