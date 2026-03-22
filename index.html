@@ -370,6 +370,7 @@ body {
         <span class="topbar-title">BBT Inventory</span>
       </div>
       <div class="topbar-actions">
+        <button class="topbar-btn" onclick="showRawDebug()" title="Debug" style="font-size:12px;">🐛</button>
         <button class="topbar-btn" onclick="refreshData()" title="Refresh">↻</button>
         <button class="topbar-btn" id="settingsBtn" onclick="toggleSettings()" title="Settings">⚙</button>
       </div>
@@ -576,11 +577,15 @@ async function bcFetch(endpoint, params) {
   return resp.json();
 }
 
-async function fetchAllPages(endpoint, params) {
+async function fetchAllPages(endpoint, params, label) {
   let allValues = [];
   let url = buildUrl(endpoint, params);
+  let page = 0;
   
   while (url) {
+    page++;
+    updateLoadingProgress(label || endpoint, allValues.length, page);
+    
     const resp = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${state.token}`,
@@ -601,7 +606,9 @@ async function fetchAllPages(endpoint, params) {
     }
     
     const data = await resp.json();
-    allValues = allValues.concat(data.value || []);
+    const newRows = data.value || [];
+    allValues = allValues.concat(newRows);
+    updateLoadingProgress(label || endpoint, allValues.length, page);
     url = data['@odata.nextLink'] || null;
   }
   
@@ -614,6 +621,7 @@ async function fetchAllPages(endpoint, params) {
 async function refreshData() {
   if (state.isLoading) return;
   state.isLoading = true;
+  const t0 = Date.now();
   
   showLoading();
   updateStatusDot('loading');
@@ -632,7 +640,7 @@ async function refreshData() {
     const itemEndpoints = ['ItemsListPBI', 'Item_Card_Excel', 'workflowItems'];
     for (const ep of itemEndpoints) {
       try {
-        items = await fetchAllPages(ep, '');
+        items = await fetchAllPages(ep, '', '📦 Items');
         if (items.length > 0) {
           console.log(`✅ Items loaded from ${ep}:`, items.length, 'rows');
           console.log('Item field names:', Object.keys(items[0]));
@@ -648,7 +656,7 @@ async function refreshData() {
     const locEndpoints = ['Items_by_Location', 'Bin_Contents_List_Excel', 'Bin_Contents_Excel'];
     for (const ep of locEndpoints) {
       try {
-        locData = await fetchAllPages(ep, '');
+        locData = await fetchAllPages(ep, '', '📍 Locations');
         if (locData.length > 0) {
           console.log(`✅ Locations loaded from ${ep}:`, locData.length, 'rows');
           console.log('Location field names:', Object.keys(locData[0]));
@@ -658,6 +666,13 @@ async function refreshData() {
         console.warn(`❌ ${ep} failed:`, e.message);
       }
     }
+    
+    // Update progress: processing
+    updateLoadingProgress('🔄 Processing', items.length + locData.length, 0);
+    
+    // Store raw data for debug
+    state._rawItems = items;
+    state._rawLocs = locData;
     
     // Build location map with flexible field names
     const locMap = {};
@@ -732,7 +747,8 @@ async function refreshData() {
     updateStatusBar();
     renderLocChips();
     renderItems();
-    showToast(`Loaded ${state.items.length} items`, 'success');
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    showToast(`✅ ${state.items.length} items loaded in ${elapsed}s`, 'success');
     
   } catch (err) {
     console.error('Refresh error:', err);
@@ -916,9 +932,20 @@ function showLoading() {
   document.getElementById('itemList').innerHTML = `
     <div class="loading-wrap">
       <div class="spinner"></div>
-      <div class="loading-text">Fetching from BC365...</div>
+      <div class="loading-text" id="loadStep">Connecting to BC365...</div>
+      <div id="loadProgress" style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:var(--accent);margin-top:4px;">—</div>
+      <div id="loadDetail" style="font-size:11px;color:var(--text3);margin-top:2px;"></div>
     </div>
   `;
+}
+
+function updateLoadingProgress(label, count, page) {
+  const stepEl = document.getElementById('loadStep');
+  const progEl = document.getElementById('loadProgress');
+  const detailEl = document.getElementById('loadDetail');
+  if (stepEl) stepEl.textContent = `Fetching ${label}...`;
+  if (progEl) progEl.textContent = count.toLocaleString() + ' rows';
+  if (detailEl) detailEl.textContent = `Page ${page} · ${label}`;
 }
 
 // ═══════════════════════════════════════════
@@ -1133,6 +1160,71 @@ setInterval(() => {
     refreshData();
   }
 }, 5 * 60 * 1000);
+
+// ═══════════════════════════════════════════
+//  DEBUG — Tap 🐛 button to show raw fields
+// ═══════════════════════════════════════════
+function showRawDebug() {
+  const el = document.getElementById('itemList');
+  const rawItems = state._rawItems || [];
+  const rawLocs = state._rawLocs || [];
+  
+  let html = `<div style="padding:4px 16px 24px;">`;
+  
+  // Items debug
+  html += `<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:12px;">`;
+  html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:8px;">📦 RAW ITEMS — ${rawItems.length} rows</div>`;
+  
+  if (rawItems.length > 0) {
+    const sample = rawItems[0];
+    const keys = Object.keys(sample);
+    html += `<div style="font-size:11px;color:var(--green);margin-bottom:6px;font-weight:600;">Fields (${keys.length}):</div>`;
+    html += `<pre style="font-size:9px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',monospace;line-height:1.8;max-height:300px;overflow:auto;">`;
+    for (const k of keys) {
+      const v = sample[k];
+      const vStr = (v === null || v === undefined) ? 'null' : (typeof v === 'number' ? '🔢 ' + v : '"' + String(v).substring(0, 60) + '"');
+      html += `<span style="color:var(--orange)">${k}</span> = ${vStr}\n`;
+    }
+    html += `</pre>`;
+  } else {
+    html += `<div style="font-size:12px;color:var(--red);">No items fetched. All endpoints failed.</div>`;
+  }
+  html += `</div>`;
+  
+  // Location debug
+  html += `<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:12px;">`;
+  html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:8px;">📍 RAW LOCATIONS — ${rawLocs.length} rows</div>`;
+  
+  if (rawLocs.length > 0) {
+    const sample = rawLocs[0];
+    const keys = Object.keys(sample);
+    html += `<div style="font-size:11px;color:var(--green);margin-bottom:6px;font-weight:600;">Fields (${keys.length}):</div>`;
+    html += `<pre style="font-size:9px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',monospace;line-height:1.8;max-height:300px;overflow:auto;">`;
+    for (const k of keys) {
+      const v = sample[k];
+      const vStr = (v === null || v === undefined) ? 'null' : (typeof v === 'number' ? '🔢 ' + v : '"' + String(v).substring(0, 60) + '"');
+      html += `<span style="color:var(--orange)">${k}</span> = ${vStr}\n`;
+    }
+    html += `</pre>`;
+  } else {
+    html += `<div style="font-size:12px;color:var(--red);">No location data fetched.</div>`;
+  }
+  html += `</div>`;
+  
+  // Processed items debug
+  html += `<div style="background:var(--surface2);border:1px solid var(--green);border-radius:12px;padding:14px;">`;
+  html += `<div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:8px;">✅ PROCESSED — ${state.items.length} items after filter</div>`;
+  if (state.items.length > 0) {
+    const s = state.items[0];
+    html += `<pre style="font-size:10px;color:var(--text2);font-family:'JetBrains Mono',monospace;line-height:1.6;">no = "${s.no}"\ndesc = "${s.desc}"\ncategory = "${s.category}"\nuom = "${s.uom}"\ninventory = ${s.inventory}\nreserved = ${s.reserved}\navailable = ${s.available}\nsoQty = ${s.soQty}\npoQty = ${s.poQty}\nlocations = ${s.locations.length}</pre>`;
+  }
+  html += `</div>`;
+  
+  html += `<div style="text-align:center;margin-top:16px;font-size:11px;color:var(--text3);">📸 Screenshot this and send to Claude to fix field mapping</div>`;
+  html += `</div>`;
+  
+  el.innerHTML = html;
+}
 </script>
 </body>
 </html>
