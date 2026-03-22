@@ -638,66 +638,99 @@ async function refreshData() {
   updateStatusDot('loading');
   
   try {
-    // Helper: find field value by trying multiple possible names
     const f = (row, ...names) => {
-      for (const n of names) {
-        if (row[n] !== undefined && row[n] !== null) return row[n];
-      }
+      for (const n of names) { if (row[n] !== undefined && row[n] !== null) return row[n]; }
       return null;
     };
     
-    // ──── STEP 1: Fetch Item data (Page 30 has ALL item card fields) ────
-    let items = [];
-    let usedEndpoint = '';
-    const itemEndpoints = ['Item_Card_Excel', 'ItemsListPBI', 'workflowItems'];
-    for (const ep of itemEndpoints) {
-      try {
-        items = await fetchAllPages(ep, '', '📦 Items (' + ep + ')');
-        if (items.length > 0) { usedEndpoint = ep; break; }
-      } catch (e) { console.warn('❌ ' + ep + ':', e.message); }
+    // ──── STEP 1: Fetch product details from PRODUCTmr (Page 60009) ────
+    // This has Description, Description_2, Brand, Category, Product Line etc.
+    let productDetails = [];
+    try {
+      productDetails = await fetchAllPages('PRODUCTmr', '', '📋 Product Details');
+    } catch (e) { console.warn('PRODUCTmr failed:', e.message); }
+    
+    // Build lookup: No -> product detail row
+    const prodMap = {};
+    for (const p of productDetails) {
+      const no = f(p, 'No', 'No_', 'Item_No') || '';
+      if (no) prodMap[no] = p;
     }
     
-    // ──── STEP 2: Fetch Location breakdown ────
+    // ──── STEP 2: Fetch Item inventory from Item_Card_Excel (Page 30) ────
+    let items = [];
+    let usedEndpoint = '';
+    for (const ep of ['Item_Card_Excel', 'ItemsListPBI']) {
+      try {
+        items = await fetchAllPages(ep, '', '📦 Inventory (' + ep + ')');
+        if (items.length > 0) { usedEndpoint = ep; break; }
+      } catch (e) { console.warn(ep + ' failed:', e.message); }
+    }
+    
+    // ──── STEP 3: Fetch Location breakdown ────
     let locData = [];
     let locEndpointUsed = '';
-    const locEndpoints = ['Items_by_Location', 'Bin_Contents_List_Excel'];
-    for (const ep of locEndpoints) {
+    for (const ep of ['Items_by_Location', 'Bin_Contents_List_Excel']) {
       try {
         locData = await fetchAllPages(ep, '', '📍 Locations (' + ep + ')');
         if (locData.length > 0) { locEndpointUsed = ep; break; }
-      } catch (e) { console.warn('❌ ' + ep + ':', e.message); }
+      } catch (e) { console.warn(ep + ' failed:', e.message); }
     }
     
-    updateLoadingProgress('🔄 Processing', items.length + locData.length, 0, ((Date.now() - t0) / 1000).toFixed(1));
+    updateLoadingProgress('🔄 Processing', items.length + locData.length + productDetails.length, 0, ((Date.now() - t0) / 1000).toFixed(1));
     
     // Store raw for debug
     state._rawItems = items;
     state._rawLocs = locData;
+    state._rawProducts = productDetails;
     state._usedEndpoint = usedEndpoint;
     state._locEndpoint = locEndpointUsed;
     
-    // ──── STEP 3: Auto-detect field names from first row ────
+    // ──── STEP 4: Auto-detect item field names ────
     let fieldMap = {};
     if (items.length > 0) {
       const k = Object.keys(items[0]);
-      const find = (candidates) => candidates.find(c => k.includes(c)) || null;
-      
+      const find = (cs) => cs.find(c => k.includes(c)) || null;
       fieldMap = {
         no: find(['No', 'No_', 'Item_No']),
-        desc: find(['Description', 'Item_Description', 'Name', 'Search_Description']),
+        desc: find(['Description', 'Item_Description', 'Name']),
+        desc2: find(['Description_2', 'Description2']),
         category: find(['Item_Category_Code', 'Item_Category', 'Gen_Prod_Posting_Group']),
-        uom: find(['Base_Unit_of_Measure', 'Unit_of_Measure', 'Sales_Unit_of_Measure']),
+        uom: find(['Base_Unit_of_Measure', 'Unit_of_Measure']),
         inventory: find(['Inventory', 'Qty_on_Hand', 'Net_Change', 'Quantity']),
         soQty: find(['Qty_on_Sales_Order', 'Qty_on_Sales_Orders']),
         poQty: find(['Qty_on_Purch_Order', 'Qty_on_Purch_Orders']),
-        reserved: find(['Reserved_Qty_on_Inventory', 'Reserved_Qty', 'Qty_on_Component_Lines']),
+        reserved: find(['Reserved_Qty_on_Inventory', 'Reserved_Qty']),
+        unitCost: find(['Unit_Cost', 'Average_Cost', 'Last_Direct_Cost']),
       };
-      console.log('📋 Field mapping:', JSON.stringify(fieldMap));
-      console.log('📋 All fields:', k.join(', '));
       state._fieldMap = fieldMap;
+      console.log('Field map:', JSON.stringify(fieldMap));
     }
     
-    // ──── STEP 4: Build location map ────
+    // Auto-detect product detail field names
+    let prodFieldMap = {};
+    if (productDetails.length > 0) {
+      const pk = Object.keys(productDetails[0]);
+      const pfind = (cs) => cs.find(c => pk.includes(c)) || null;
+      prodFieldMap = {
+        no: pfind(['No', 'No_', 'Item_No']),
+        desc: pfind(['Description', 'Item_Description']),
+        desc2: pfind(['Description_2', 'Description2']),
+        brand: pfind(['PRODUCT_LINE_5_BRAND', 'Brand', 'Vendor_Name']),
+        mainDetail: pfind(['Main_Detail', 'Main']),
+        plineDetail: pfind(['PLine_Detail', 'Product_Line']),
+        pline1: pfind(['PLine1_Code', 'PLine1']),
+        classDetail: pfind(['Class_Detail', 'Class']),
+        marketDetail: pfind(['Market_Detail', 'Market']),
+        mrDetail: pfind(['MR_Detail', 'MR']),
+        groupDetail: pfind(['Group_Detail', 'Group']),
+        productType: pfind(['PRODUCT_TYPE', 'Type']),
+      };
+      state._prodFieldMap = prodFieldMap;
+      console.log('Product field map:', JSON.stringify(prodFieldMap));
+    }
+    
+    // ──── STEP 5: Build location map ────
     const locMap = {};
     const locSet = new Set();
     
@@ -713,12 +746,11 @@ async function refreshData() {
         'Item_Description','Quantity','Pick_Qty','Put_away_Qty','Base_Unit_of_Measure',
         'ATO_Components_Pick_Qty','Neg_Adjmt_Qty','Pos_Adjmt_Qty']);
       
-      // Detect: is this a MATRIX page (locations as columns) or FLAT (Location_Code field)?
-      const hasLocationCodeField = allKeys.includes('Location_Code') || allKeys.includes('LocationCode');
+      const hasLocField = allKeys.includes('Location_Code') || allKeys.includes('LocationCode');
       const numericCols = allKeys.filter(k => !skipFields.has(k) && typeof sampleRow[k] === 'number');
       
-      if (!hasLocationCodeField && numericCols.length > 1) {
-        // MATRIX: location codes ARE the column names
+      if (!hasLocField && numericCols.length > 1) {
+        // MATRIX format
         for (const row of locData) {
           const itemNo = f(row, 'No', 'Code', 'No_', 'Item_No') || '';
           if (!itemNo) continue;
@@ -731,7 +763,7 @@ async function refreshData() {
           }
         }
       } else {
-        // FLAT: each row has a Location_Code field
+        // FLAT format
         for (const row of locData) {
           const itemNo = f(row, 'Item_No', 'Item_No_', 'No', 'Code', 'No_') || '';
           const loc = f(row, 'Location_Code', 'LocationCode', 'Location') || '';
@@ -745,7 +777,7 @@ async function refreshData() {
       }
     }
     
-    // ──── STEP 5: Build final items array ────
+    // ──── STEP 6: Merge everything into final items ────
     state.items = items.map(item => {
       const no = (fieldMap.no ? item[fieldMap.no] : f(item, 'No', 'No_')) || '';
       const inventory = parseFloat((fieldMap.inventory ? item[fieldMap.inventory] : 0) || 0);
@@ -758,11 +790,22 @@ async function refreshData() {
       const totalReserved = itemReserved || locReserved;
       const available = inventory - totalReserved;
       
+      // Get product detail from PRODUCTmr
+      const pd = prodMap[no] || {};
+      
       return {
         no,
-        desc: (fieldMap.desc ? item[fieldMap.desc] : '') || '',
+        desc: (fieldMap.desc ? item[fieldMap.desc] : '') || (prodFieldMap.desc && pd[prodFieldMap.desc]) || '',
+        desc2: (fieldMap.desc2 ? item[fieldMap.desc2] : '') || (prodFieldMap.desc2 && pd[prodFieldMap.desc2]) || '',
         category: (fieldMap.category ? item[fieldMap.category] : '') || '',
         uom: (fieldMap.uom ? item[fieldMap.uom] : '') || '',
+        brand: (prodFieldMap.brand && pd[prodFieldMap.brand]) || '',
+        mainDetail: (prodFieldMap.mainDetail && pd[prodFieldMap.mainDetail]) || '',
+        plineDetail: (prodFieldMap.plineDetail && pd[prodFieldMap.plineDetail]) || '',
+        pline1: (prodFieldMap.pline1 && pd[prodFieldMap.pline1]) || '',
+        classDetail: (prodFieldMap.classDetail && pd[prodFieldMap.classDetail]) || '',
+        marketDetail: (prodFieldMap.marketDetail && pd[prodFieldMap.marketDetail]) || '',
+        productType: (prodFieldMap.productType && pd[prodFieldMap.productType]) || '',
         inventory,
         reserved: totalReserved,
         available,
@@ -936,13 +979,23 @@ function renderItems() {
         <div class="item-avail-badge ${badgeClass}">${badgeText}</div>
       </div>
       <div class="item-desc">${esc(item.desc)}</div>
+      ${item.desc2 ? `<div style="font-size:12px;color:var(--text2);margin-top:2px;line-height:1.3;">${esc(item.desc2)}</div>` : ''}
       <div class="item-meta">
-        <div class="item-meta-tag"><span class="label">Cat:</span> ${esc(item.category || '—')}</div>
+        ${item.brand ? `<div class="item-meta-tag"><span class="label">Brand:</span> ${esc(item.brand)}</div>` : ''}
+        ${item.plineDetail ? `<div class="item-meta-tag"><span class="label">Line:</span> ${esc(item.plineDetail)}</div>` : ''}
+        ${item.classDetail ? `<div class="item-meta-tag"><span class="label">Class:</span> ${esc(item.classDetail)}</div>` : ''}
         <div class="item-meta-tag"><span class="label">UoM:</span> ${esc(item.uom)}</div>
-        <div class="item-meta-tag"><span class="label">On PO:</span> ${fmtNum(item.poQty)}</div>
       </div>
       
       <div class="item-detail">
+        ${item.mainDetail || item.marketDetail || item.pline1 ? `
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">
+          ${item.mainDetail ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(59,130,246,0.1);color:var(--accent);">${esc(item.mainDetail)}</span>` : ''}
+          ${item.marketDetail ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,0.1);color:var(--green);">${esc(item.marketDetail)}</span>` : ''}
+          ${item.pline1 ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(245,158,11,0.1);color:var(--orange);">${esc(item.pline1)}</span>` : ''}
+          ${item.productType ? `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface3);color:var(--text2);">Type: ${esc(item.productType)}</span>` : ''}
+        </div>` : ''}
+        
         <div class="detail-summary">
           <div class="detail-stat">
             <div class="detail-stat-label">On Hand</div>
@@ -1025,6 +1078,12 @@ function getFilteredItems(ignoreLocation) {
     items = items.filter(i => 
       i.no.toLowerCase().includes(q) || 
       i.desc.toLowerCase().includes(q) ||
+      i.desc2.toLowerCase().includes(q) ||
+      i.brand.toLowerCase().includes(q) ||
+      i.plineDetail.toLowerCase().includes(q) ||
+      i.pline1.toLowerCase().includes(q) ||
+      i.classDetail.toLowerCase().includes(q) ||
+      i.mainDetail.toLowerCase().includes(q) ||
       i.category.toLowerCase().includes(q)
     );
   }
@@ -1296,19 +1355,29 @@ function appendDebugPanel() {
   
   const rawItems = state._rawItems || [];
   const rawLocs = state._rawLocs || [];
+  const rawProds = state._rawProducts || [];
   
   let html = `<div style="padding:12px 16px 24px;">`;
   html += `<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:10px;">`;
   html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px;">🔧 DEBUG — Field Mapping</div>`;
-  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:8px;">Endpoint: ${state._usedEndpoint || '?'} | Loc: ${state._locEndpoint || '?'}</div>`;
+  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:8px;">Items: ${state._usedEndpoint || '?'} (${rawItems.length}) | Loc: ${state._locEndpoint || '?'} (${rawLocs.length}) | Products: PRODUCTmr (${rawProds.length})</div>`;
   
   if (state._fieldMap) {
+    html += `<div style="font-size:10px;color:var(--orange);font-weight:600;margin-bottom:4px;">Item Fields:</div>`;
     html += `<pre style="font-size:10px;color:var(--text);font-family:'JetBrains Mono',monospace;line-height:2;white-space:pre-wrap;">`;
     for (const [key, val] of Object.entries(state._fieldMap)) {
-      const icon = val ? '✅' : '❌';
-      html += `${icon} ${key} → ${val || 'NOT FOUND'}\n`;
+      html += `${val ? '✅' : '❌'} ${key} → ${val || 'NOT FOUND'}\n`;
     }
     html += `</pre>`;
+  }
+  if (state._prodFieldMap) {
+    html += `<div style="font-size:10px;color:var(--green);font-weight:600;margin:4px 0;">Product Fields:</div>`;
+    html += `<pre style="font-size:10px;color:var(--text);font-family:'JetBrains Mono',monospace;line-height:2;white-space:pre-wrap;">`;
+    for (const [key, val] of Object.entries(state._prodFieldMap)) {
+      html += `${val ? '✅' : '❌'} ${key} → ${val || 'NOT FOUND'}\n`;
+    }
+    html += `</pre>`;
+  }
   }
   html += `</div>`;
   
