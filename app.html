@@ -554,10 +554,11 @@ function startAuth() {
   
   // Build redirect URI — must match EXACTLY what's registered in Azure AD
   let redirectUri = window.location.origin + window.location.pathname;
-  // Remove trailing index.html if present
-  redirectUri = redirectUri.replace(/\/index\.html$/, '/');
-  // Ensure trailing slash for GitHub Pages
-  if (!redirectUri.endsWith('/')) redirectUri += '/';
+  // For index.html, use the directory path with trailing slash
+  if (redirectUri.endsWith('/index.html')) {
+    redirectUri = redirectUri.replace(/\/index\.html$/, '/');
+  }
+  // Do NOT add trailing slash for other .html files (app.html, diag.html etc.)
   
   const scope = encodeURIComponent('https://api.businesscentral.dynamics.com/.default');
   const nonce = Math.random().toString(36).substr(2);
