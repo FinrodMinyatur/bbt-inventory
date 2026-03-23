@@ -711,7 +711,7 @@ async function refreshData() {
       return null;
     };
     
-    // ──── STEP 1: Load product master data (cached static file) ────
+    // ──── STEP 1: Load product catalog (embedded, instant) ────
     updateLoadingProgress('📋 Product catalog', 0, 1, '0');
     await new Promise(r => setTimeout(r, 0));
     
@@ -720,88 +720,65 @@ async function refreshData() {
         const dataEl = document.getElementById('productData');
         if (dataEl) {
           state._productCache = JSON.parse(dataEl.textContent);
-          console.log('✅ Product catalog loaded:', Object.keys(state._productCache.p || {}).length, 'items');
-        } else {
-          console.warn('❌ productData script tag not found');
+          console.log('✅ Product catalog:', Object.keys(state._productCache.p || {}).length);
         }
-      } catch(e) { console.warn('Product catalog parse error:', e.message); }
+      } catch(e) { console.warn('Product catalog error:', e.message); }
     }
-    // Load brand name map
     if (!state._brandMap) {
       try {
         const brandEl = document.getElementById('brandMap');
         if (brandEl) {
           state._brandMap = JSON.parse(brandEl.textContent);
-          console.log('✅ Brand map loaded:', Object.keys(state._brandMap).length, 'brands');
-          console.log('   ACNR →', state._brandMap['ACNR'], '| CARR →', state._brandMap['CARR']);
+          console.log('✅ Brand map:', Object.keys(state._brandMap).length);
         }
-      } catch(e) { console.warn('Brand map error:', e.message); }
+      } catch(e) {}
     }
     const prodMap = state._productCache?.p || {};
     const focusRules = state._productCache?.f || [];
+    const bm = state._brandMap || {};
     
-    updateLoadingProgress('📋 Product catalog', Object.keys(prodMap).length, 1, ((Date.now()-t0)/1000).toFixed(1));
-    await new Promise(r => setTimeout(r, 0));
+    // ──── STEP 2: Fetch ONLY needed fields + only items with stock ────
+    const selectFields = [
+      'No','Description','Description_2','Inventory',
+      'Reserved_Qty_on_Inventory','Qty_on_Sales_Order','Qty_on_Purch_Order',
+      'Base_Unit_of_Measure','PRODUCT_LINE_5_BRAND','PRODUCT_LINE',
+      'PRODUCT_LINE_1','Product_Main','PRODUCT_MARKET','PRODUCT_TYPE',
+      'PRODUCT_CALSS','Item_Category_Code'
+    ].join(',');
     
-    // ──── STEP 2: Fetch live inventory from BC365 (1 fast call) ────
     let items = [];
     let usedEndpoint = '';
-    for (const ep of ['Item_Card_Excel', 'ItemsListPBI']) {
+    try {
+      items = await fetchAllPages('Item_Card_Excel',
+        '$select=' + selectFields + '&$filter=Inventory gt 0',
+        '📦 Inventory (optimized)');
+      usedEndpoint = 'Item_Card_Excel';
+    } catch(e) {
+      console.warn('Optimized fetch failed, trying without $select:', e.message);
       try {
-        items = await fetchAllPages(ep, '', '📦 Inventory');
-        if (items.length > 0) { usedEndpoint = ep; break; }
-      } catch (e) { console.warn(ep + ':', e.message); }
+        items = await fetchAllPages('Item_Card_Excel', '$filter=Inventory gt 0', '📦 Inventory');
+        usedEndpoint = 'Item_Card_Excel (no $select)';
+      } catch(e2) {
+        console.warn('Filtered fetch failed, trying unfiltered:', e2.message);
+        items = await fetchAllPages('Item_Card_Excel', '', '📦 Inventory (full)');
+        usedEndpoint = 'Item_Card_Excel (full)';
+      }
     }
-    
-    // Store raw for debug
     state._rawItems = items;
     state._usedEndpoint = usedEndpoint;
     
-    // ──── STEP 3: Auto-detect BC365 field names ────
-    let fm = {};
-    if (items.length > 0) {
-      const k = Object.keys(items[0]);
-      const find = (cs) => cs.find(c => k.includes(c)) || null;
-      fm = {
-        no: find(['No', 'No_', 'Item_No']),
-        desc: find(['Description', 'Item_Description', 'Name']),
-        desc2: find(['Description_2', 'Description2']),
-        category: find(['Item_Category_Code', 'Item_Category']),
-        uom: find(['Base_Unit_of_Measure', 'Unit_of_Measure']),
-        inventory: find(['Inventory', 'Qty_on_Hand', 'Net_Change']),
-        soQty: find(['Qty_on_Sales_Order', 'Qty_on_Sales_Orders']),
-        poQty: find(['Qty_on_Purch_Order', 'Qty_on_Purch_Orders']),
-        reserved: find(['Reserved_Qty_on_Inventory', 'Reserved_Qty']),
-        location: find(['Location_Filter', 'Location_Code']),
-      };
-      state._fieldMap = fm;
-      console.log('📋 Field map:', JSON.stringify(fm));
-      console.log('📋 All BC365 fields:', k.join(', '));
-    }
-    
-    // ──── STEP 4: Focus Group matching ────
-    function matchFocus(p) {
-      if (!p || !Array.isArray(p) || focusRules.length === 0) return { fg: '', mfg: '' };
-      // p = [desc, desc2, main, market, mr, pline, pline1, brand, type, class]
-      // r = [brand, main, p1, pl, cl, fg, mfg]
-      for (const r of focusRules) {
-        const match = (rule, val) => rule === 'any' || rule === val;
-        if (match(r[0], p[7]) && match(r[1], p[2]) && match(r[2], p[6]) && match(r[3], p[5]) && match(r[4], p[9])) {
-          return { fg: r[5], mfg: r[6] };
-        }
-      }
-      return { fg: '', mfg: '' };
-    }
-    
-    // ──── STEP 4b: Fetch Location from Bin Contents (flat table) ────
+    // ──── STEP 3: Fetch Location from Bin Contents ────
     let locData = [];
     try {
       locData = await fetchAllPages('Bin_Contents_List_Excel', 
         '$select=Location_Code,Item_No,Quantity_Base', '📍 Locations');
-    } catch(e) { console.warn('Bin Contents fetch failed:', e.message); }
+    } catch(e) { console.warn('Bin Contents failed:', e.message); }
     state._rawLocs = locData;
     
-    // Parse Bin Contents: flat table with Location_Code, Item_No, Quantity_Base
+    updateLoadingProgress('🔄 Processing', items.length + locData.length, 0, ((Date.now()-t0)/1000).toFixed(1));
+    await new Promise(r => setTimeout(r, 0));
+    
+    // ──── STEP 4: Build location map ────
     const locMap = {};
     const locSet = new Set();
     for (const row of locData) {
@@ -813,50 +790,47 @@ async function refreshData() {
       locMap[itemNo].push({ loc, qty, reserved: 0, available: qty });
       locSet.add(loc);
     }
-    console.log('📍 Locations found:', Array.from(locSet));
-    console.log('📍 Items with location data:', Object.keys(locMap).length);
     
-    // ──── STEP 5: Merge BC365 inventory + product catalog ────
-    updateLoadingProgress('🔄 Merging data', items.length, 0, ((Date.now()-t0)/1000).toFixed(1));
-    await new Promise(r => setTimeout(r, 0));
+    // ──── STEP 5: Focus Group matching ────
+    function matchFocus(p) {
+      if (!p || !Array.isArray(p) || focusRules.length === 0) return { fg: '', mfg: '' };
+      for (const r of focusRules) {
+        const m = (rule, val) => rule === 'any' || rule === val;
+        if (m(r[0], p[7]) && m(r[1], p[2]) && m(r[2], p[6]) && m(r[3], p[5]) && m(r[4], p[9])) {
+          return { fg: r[5], mfg: r[6] };
+        }
+      }
+      return { fg: '', mfg: '' };
+    }
     
+    // ──── STEP 6: Merge into final items ────
     state.items = items.map(item => {
-      const no = (fm.no ? item[fm.no] : '') || '';
-      const inventory = parseFloat((fm.inventory ? item[fm.inventory] : 0) || 0);
-      const soQty = parseFloat((fm.soQty ? item[fm.soQty] : 0) || 0);
-      const poQty = parseFloat((fm.poQty ? item[fm.poQty] : 0) || 0);
-      const reserved = parseFloat((fm.reserved ? item[fm.reserved] : 0) || 0);
+      const no = item.No || '';
+      const inventory = parseFloat(item.Inventory) || 0;
+      const reserved = parseFloat(item.Reserved_Qty_on_Inventory) || 0;
+      const soQty = parseFloat(item.Qty_on_Sales_Order) || 0;
+      const poQty = parseFloat(item.Qty_on_Purch_Order) || 0;
       const available = inventory - reserved;
       
-      // Get product details from embedded catalog
-      // Format: [desc, desc2, main, market, mr, pline, pline1, brand, type, class]
-      const pd = prodMap[no] || prodMap[no.trim()] || prodMap[no.replace(/\s+/g, '')];
+      const brandCode = item.PRODUCT_LINE_5_BRAND || '';
+      const pd = prodMap[no];
       const focus = matchFocus(pd);
-      
-      // Debug first item
-      if (!state._debugDone) {
-        state._debugDone = true;
-        console.log('🔍 First item no:', JSON.stringify(no), 'length:', no.length);
-        console.log('🔍 prodMap has key?', no in prodMap);
-        console.log('🔍 prodMap sample keys:', Object.keys(prodMap).slice(0,5));
-        console.log('🔍 pd result:', pd);
-      }
       
       return {
         no,
-        desc: (pd && pd[0]) || (fm.desc ? item[fm.desc] : '') || '',
-        desc2: (pd && pd[1]) || (fm.desc2 ? item[fm.desc2] : '') || '',
-        category: (fm.category ? item[fm.category] : '') || '',
-        uom: (fm.uom ? item[fm.uom] : '') || '',
-        brandCode: (pd && pd[7]) || '',
-        brand: (pd && pd[7]) ? ((state._brandMap && state._brandMap[pd[7]]) || pd[7]) : '',
-        mainDetail: (pd && pd[2]) || '',
-        plineDetail: (pd && pd[5]) || '',
-        pline1: (pd && pd[6]) || '',
-        classDetail: (pd && pd[9]) || '',
-        marketDetail: (pd && pd[3]) || '',
-        mrDetail: (pd && pd[4]) || '',
-        productType: (pd && pd[8]) || '',
+        desc: item.Description || (pd && pd[0]) || '',
+        desc2: item.Description_2 || (pd && pd[1]) || '',
+        brand: bm[brandCode] || brandCode,
+        brandCode,
+        plineDetail: item.PRODUCT_LINE || (pd && pd[5]) || '',
+        pline1: item.PRODUCT_LINE_1 || (pd && pd[6]) || '',
+        mainDetail: item.Product_Main || (pd && pd[2]) || '',
+        marketDetail: item.PRODUCT_MARKET || (pd && pd[3]) || '',
+        mrDetail: pd ? pd[4] : '',
+        productType: item.PRODUCT_TYPE || (pd && pd[8]) || '',
+        classDetail: item.PRODUCT_CALSS || (pd && pd[9]) || '',
+        category: item.Item_Category_Code || '',
+        uom: item.Base_Unit_of_Measure || '',
         focusGroup: focus.fg,
         mainFocusGroup: focus.mfg,
         inventory,
@@ -866,7 +840,7 @@ async function refreshData() {
         poQty,
         locations: (locMap[no] || []).sort((a,b) => b.qty - a.qty),
       };
-    }).filter(i => i.inventory !== 0 || i.soQty !== 0 || i.poQty !== 0);
+    }).filter(i => i.inventory > 0);
     
     // DEBUG: If no items after filter, show raw data sample
     if (state.items.length === 0 && items.length > 0) {
@@ -898,7 +872,7 @@ async function refreshData() {
     state.lastRefresh = new Date();
     updateStatusDot('online');
     updateStatusBar();
-    populateFilterDropdowns();
+    updateAllDropdowns();
 
     renderItems();
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -1132,18 +1106,19 @@ function updateLoadingProgress(label, count, page, elapsed) {
 function getFilteredItems() {
   let items = state.items;
   
-  // In-stock toggle
+  // In-stock toggle (already filtered at source, but toggle can show zero-available)
   if (state.inStockOnly) {
     items = items.filter(i => i.available > 0);
   }
   
-  // Cascading dropdown filters
+  // Read all current filter values
   const fBrand = document.getElementById('filterBrand')?.value || '';
   const fPLine = document.getElementById('filterPLine')?.value || '';
   const fPLine1 = document.getElementById('filterPLine1')?.value || '';
   const fFocus = document.getElementById('filterFocus')?.value || '';
   const fLoc = document.getElementById('filterLocation')?.value || '';
   
+  // Apply ALL active filters (order doesn't matter)
   if (fBrand) items = items.filter(i => i.brand === fBrand);
   if (fPLine) items = items.filter(i => i.plineDetail === fPLine);
   if (fPLine1) items = items.filter(i => i.pline1 === fPLine1);
@@ -1169,24 +1144,78 @@ function getFilteredItems() {
   return items;
 }
 
-// ──── Cascading filter logic ────
+// ──── Cascadingng filter logic ────
 function cascadeFilters(changedFilter) {
-  // Reset downstream filters when upstream changes
-  if (changedFilter === 'brand') {
-    document.getElementById('filterPLine').value = '';
-    document.getElementById('filterPLine1').value = '';
-    document.getElementById('filterFocus').value = '';
-  } else if (changedFilter === 'pline') {
-    document.getElementById('filterPLine1').value = '';
-    document.getElementById('filterFocus').value = '';
-  } else if (changedFilter === 'pline1') {
-    document.getElementById('filterFocus').value = '';
-  }
-  // Re-populate with cascaded options
-  populateFilterDropdowns(changedFilter);
+  // Bi-directional: update ALL OTHER dropdowns based on current combination
+  updateAllDropdowns(changedFilter);
   renderItems();
   updateStatusBar();
   updateFilterStatus();
+}
+
+function updateAllDropdowns(except) {
+  const bm = state._brandMap || {};
+  let base = state.items;
+  if (state.inStockOnly) base = base.filter(i => i.available > 0);
+  
+  // Read current values from ALL dropdowns
+  const filters = {
+    brand: document.getElementById('filterBrand')?.value || '',
+    pline: document.getElementById('filterPLine')?.value || '',
+    pline1: document.getElementById('filterPLine1')?.value || '',
+    focus: document.getElementById('filterFocus')?.value || '',
+    loc: document.getElementById('filterLocation')?.value || '',
+  };
+  
+  function countBy(arr, field) {
+    const m = {};
+    for (const i of arr) { const v = i[field]; if (v) m[v] = (m[v] || 0) + 1; }
+    return m;
+  }
+  
+  function countByLoc(arr) {
+    const m = {};
+    for (const i of arr) { for (const l of i.locations) { if (l.loc) m[l.loc] = (m[l.loc] || 0) + 1; } }
+    return m;
+  }
+  
+  // For each dropdown: apply ALL OTHER filters (except itself) to get its valid options
+  function getFiltered(excludeKey) {
+    let items = base;
+    if (excludeKey !== 'brand' && filters.brand) items = items.filter(i => i.brand === filters.brand);
+    if (excludeKey !== 'pline' && filters.pline) items = items.filter(i => i.plineDetail === filters.pline);
+    if (excludeKey !== 'pline1' && filters.pline1) items = items.filter(i => i.pline1 === filters.pline1);
+    if (excludeKey !== 'focus' && filters.focus) items = items.filter(i => i.focusGroup === filters.focus);
+    if (excludeKey !== 'loc' && filters.loc) items = items.filter(i => i.locations.some(l => l.loc === filters.loc));
+    return items;
+  }
+  
+  function rebuildSelect(id, counts, placeholder, labelFn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.value;
+    while (el.firstChild) el.removeChild(el.firstChild);
+    
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = placeholder + ' (' + Object.keys(counts).length + ')';
+    el.appendChild(def);
+    
+    for (const v of Object.keys(counts).sort()) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = (labelFn ? labelFn(v) : v) + ' (' + counts[v] + ')';
+      el.appendChild(opt);
+    }
+    el.value = (prev in counts) ? prev : '';
+  }
+  
+  // Rebuild each dropdown except the one the user just changed
+  if (except !== 'brand')  rebuildSelect('filterBrand', countBy(getFiltered('brand'), 'brand'), '🏷 All Brands', c => bm[c] || c);
+  if (except !== 'pline')  rebuildSelect('filterPLine', countBy(getFiltered('pline'), 'plineDetail'), '📦 Product Line');
+  if (except !== 'pline1') rebuildSelect('filterPLine1', countBy(getFiltered('pline1'), 'pline1'), '🔧 Sub-category');
+  if (except !== 'focus')  rebuildSelect('filterFocus', countBy(getFiltered('focus'), 'focusGroup'), '⭐ Focus Group');
+  if (except !== 'loc')    rebuildSelect('filterLocation', countByLoc(getFiltered('loc')), '📍 All Locations');
 }
 
 function toggleInStock() {
@@ -1203,7 +1232,7 @@ function toggleInStock() {
     btn.style.borderColor = 'var(--border)';
     btn.style.color = 'var(--text2)';
   }
-  populateFilterDropdowns('stock');
+  updateAllDropdowns('stock');
   renderItems();
   updateStatusBar();
   updateFilterStatus();
@@ -1217,7 +1246,7 @@ function clearAllFilters() {
   state.inStockOnly = false;
   const btn = document.getElementById('toggleStock');
   if (btn) { btn.textContent = '📊 All Stock'; btn.style.background = 'var(--surface)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text2)'; }
-  populateFilterDropdowns();
+  updateAllDropdowns();
   renderItems();
   updateStatusBar();
   updateFilterStatus();
@@ -1232,87 +1261,11 @@ function updateFilterStatus() {
     .filter(id => document.getElementById(id)?.value).length + (state.inStockOnly ? 1 : 0);
   
   if (activeFilters > 0 || state.searchQuery) {
-    el.innerHTML = `<span style="color:var(--accent)">${filtered.length}</span> of ${total} items shown · ${activeFilters} filter${activeFilters !== 1 ? 's' : ''} active`;
+    el.innerHTML = `<span style="color:var(--accent)">${filtered.length}</span> of ${total} items · ${activeFilters} filter${activeFilters !== 1 ? 's' : ''} active`;
   } else {
     el.innerHTML = `${total} items`;
   }
 }
-
-function populateFilterDropdowns(changedFilter) {
-  const bm = state._brandMap || {};
-  let base = state.items;
-  if (state.inStockOnly) base = base.filter(i => i.available > 0);
-  
-  // Read current values BEFORE any DOM changes
-  const fBrand = document.getElementById('filterBrand')?.value || '';
-  const fPLine = document.getElementById('filterPLine')?.value || '';
-  const fPLine1 = document.getElementById('filterPLine1')?.value || '';
-  
-  // Cascade filtering
-  const afterBrand = fBrand ? base.filter(i => i.brand === fBrand) : base;
-  const afterPLine = fPLine ? afterBrand.filter(i => i.plineDetail === fPLine) : afterBrand;
-  const afterPLine1 = fPLine1 ? afterPLine.filter(i => i.pline1 === fPLine1) : afterPLine;
-  
-  function countBy(arr, field) {
-    const m = {};
-    for (const i of arr) { const v = i[field]; if (v) m[v] = (m[v] || 0) + 1; }
-    return m;
-  }
-  
-  // Rebuild a select dropdown using DOM API (not innerHTML) for reliable selection
-  function rebuildSelect(id, counts, placeholder, labelFn) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const prev = el.value;
-    
-    // Clear all options
-    while (el.firstChild) el.removeChild(el.firstChild);
-    
-    // Default option
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = placeholder + ' (' + Object.keys(counts).length + ')';
-    el.appendChild(def);
-    
-    // Add sorted options
-    const sorted = Object.keys(counts).sort();
-    for (const v of sorted) {
-      const opt = document.createElement('option');
-      opt.value = v;
-      opt.textContent = (labelFn ? labelFn(v) : v) + ' (' + counts[v] + ')';
-      el.appendChild(opt);
-    }
-    
-    // Restore previous selection if still valid
-    if (prev && (prev in counts)) {
-      el.value = prev;
-    } else {
-      el.value = '';
-    }
-  }
-  
-  // Location counts (not cascaded)
-  const locCounts = {};
-  for (const i of base) { for (const l of i.locations) { if (l.loc) locCounts[l.loc] = (locCounts[l.loc] || 0) + 1; } }
-  
-  // Determine which dropdowns to rebuild:
-  // - Only rebuild DOWNSTREAM of what changed
-  // - Never rebuild the dropdown the user just interacted with
-  const rebuild = {
-    brand: !changedFilter || changedFilter === 'init' || changedFilter === 'stock',
-    pline: !changedFilter || changedFilter === 'init' || changedFilter === 'brand' || changedFilter === 'stock',
-    pline1: !changedFilter || changedFilter === 'init' || changedFilter === 'brand' || changedFilter === 'pline' || changedFilter === 'stock',
-    focus: true, // Always rebuild focus (it's the last in cascade)
-    loc: !changedFilter || changedFilter === 'init' || changedFilter === 'stock',
-  };
-  
-  if (rebuild.brand) rebuildSelect('filterBrand', countBy(base, 'brand'), '🏷 All Brands', c => bm[c] || c);
-  if (rebuild.pline) rebuildSelect('filterPLine', countBy(afterBrand, 'plineDetail'), '📦 Product Line');
-  if (rebuild.pline1) rebuildSelect('filterPLine1', countBy(afterPLine, 'pline1'), '🔧 Sub-category');
-  if (rebuild.focus) rebuildSelect('filterFocus', countBy(afterPLine1, 'focusGroup'), '⭐ Focus Group');
-  if (rebuild.loc) rebuildSelect('filterLocation', locCounts, '📍 All Locations');
-}
-
 
 function handleSearch(val) {
   state.searchQuery = val.trim();
